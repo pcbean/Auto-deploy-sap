@@ -45,8 +45,8 @@ on:
         default: ''
 
 env:
-  DOCKER_IMAGE: 'mrcolorrain/vnc-browser:debian'  # 切回 debian
-  MEMORY: ${{ secrets.MEMORY || '2048M' }}  # debian 需更多内存
+  DOCKER_IMAGE: 'mrcolorrain/vnc-browser:debian'
+  MEMORY: ${{ secrets.MEMORY || '2048M' }}
   DISK: ${{ secrets.DISK || '1536M' }}
 
 jobs:
@@ -59,7 +59,7 @@ jobs:
         wget -q -O - https://packages.cloudfoundry.org/debian/cli.cloudfoundry.org.key | sudo apt-key add -
         echo "deb https://packages.cloudfoundry.org/debian stable main" | sudo tee /etc/apt/sources.list.d/cloudfoundry-cli.list
         sudo apt-get update
-        sudo apt-get install -y cf8-cli jq curl  # jq/curl 用于检查和测试
+        sudo apt-get install -y cf8-cli curl  # 移除 jq，避免 --json 错误
 
     - name: Determine CF API endpoint and app name
       run: |
@@ -129,54 +129,51 @@ jobs:
           echo "✅ 应用创建成功"
         else
           echo "❌ 部署失败"
-          exit 1  # 无自动 delete
+          exit 1
         fi
 
     - name: Set environment variables
       run: |
-        # 模仿 alpine 关键修复：NOVNC_WEBSOCKIFY_PORT 用单引号，让 debian 运行时替换 $PORT
-        cf set-env ${{ env.APP_NAME }} NOVNC_WEBSOCKIFY_PORT '$PORT'
+        # 修复：重置为 fallback，添加 args 强制绑定 $PORT（运行时替换）
+        cf set-env ${{ env.APP_NAME }} NOVNC_WEBSOCKIFY_PORT ""
+        cf set-env ${{ env.APP_NAME }} WEBSOCKIFY_ARGS "--bind=0.0.0.0:$PORT --target=localhost:5900"  # 命令行覆盖 conf
         cf set-env ${{ env.APP_NAME }} VNC_PORT "5900"
         cf set-env ${{ env.APP_NAME }} VNC_PASSWORD "${{ secrets.VNC_PASSWORD || 'vncpass' }}"
         cf set-env ${{ env.APP_NAME }} VNC_RESOLUTION "${{ secrets.VNC_RESOLUTION || '1280x720' }}"
         cf set-env ${{ env.APP_NAME }} AUTO_START_BROWSER "true"
         cf set-env ${{ env.APP_NAME }} STARTING_WEBSITE_URL "https://www.google.com"
-        # 添加绑定全接口（如果 debian 支持）
-        cf set-env ${{ env.APP_NAME }} WEBSOCKIFY_BIND "0.0.0.0"
-        echo "✅ 环境变量设置完成（无 restage，运行时生效）"
+        echo "✅ 环境变量设置完成（无 restage）"
 
     - name: Check Detailed Logs
       run: |
         sleep 5
-        cf logs ${{ env.APP_NAME }} --recent | grep -E "(websockify|VNC|PORT|Listening|bind|error)" || echo "日志检查：无明显错误"
+        cf logs ${{ env.APP_NAME }} --recent | grep -E "(websockify|VNC|PORT|Listening|bind|error|spawned|exited)" || echo "日志检查：无明显错误"
 
     - name: Start application
       run: |
         cf start ${{ env.APP_NAME }}
-        sleep 15  # 初始等待，debian 启动稍慢
+        sleep 20  # 延长初始等待，观察 websockify
         
         for i in {1..30}; do
-          STATUS=$(cf app ${{ env.APP_NAME }} --json | jq -r '.requested_state // empty' || cf app ${{ env.APP_NAME }} | grep "requested state:" | awk '{print $3}')
-          INSTANCES=$(cf app ${{ env.APP_NAME }} --json | jq -r '[.instances[] | select(.state == "RUNNING")] | length // 0' || cf app ${{ env.APP_NAME }} | grep "#0" | awk '{print $2}' || echo "starting")
+          STATUS=$(cf app ${{ env.APP_NAME }} | grep "requested state:" | awk '{print $3}')
+          INSTANCES=$(cf app ${{ env.APP_NAME }} | grep "#0" | awk '{print $2}' || echo "starting")
           
           echo "[$i/30] 状态: $STATUS, 实例: $INSTANCES"
           
-          if [ "$STATUS" = "STARTED" ] || [ "$STATUS" = "started" ]; then
-            if [ "$INSTANCES" = "1" ] || [ "$INSTANCES" = "running" ]; then
-              echo "✅ 浏览器启动成功!"
-              ROUTE=$(cf app ${{ env.APP_NAME }} | grep -E "(routes:|urls:)" | awk '{print $2}' | head -1 | sed 's/,//' || echo "unknown")
-              if [ "$ROUTE" != "unknown" ]; then
-                RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" -m 10 https://$ROUTE || echo "timeout")
-                echo "HTTP 测试响应: $RESPONSE (200 表示无 502)"
-              fi
-              echo ""
-              echo "🌐 访问地址: https://$ROUTE"
-              echo "🔐 VNC密码: ${{ secrets.VNC_PASSWORD || 'vncpass' }}"
-              echo ""
-              echo "💡 打开地址后点击'连接'按钮即可使用浏览器"
-              cf logs ${{ env.APP_NAME }} --recent | grep -E "(websockify|VNC|PORT|Listening)" || echo "日志检查完成"
-              exit 0
+          if [ "$STATUS" = "started" ] && [ "$INSTANCES" = "running" ]; then
+            echo "✅ 浏览器启动成功!"
+            ROUTE=$(cf app ${{ env.APP_NAME }} | grep -E "(routes:|urls:)" | awk '{print $2}' | head -1 | sed 's/,//' || echo "unknown")
+            if [ "$ROUTE" != "unknown" ]; then
+              RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" -m 10 https://$ROUTE || echo "timeout")
+              echo "HTTP 测试响应: $RESPONSE (200 表示成功)"
             fi
+            echo ""
+            echo "🌐 访问地址: https://$ROUTE"
+            echo "🔐 VNC密码: ${{ secrets.VNC_PASSWORD || 'vncpass' }}"
+            echo ""
+            echo "💡 打开地址后点击'连接'按钮即可使用浏览器"
+            cf logs ${{ env.APP_NAME }} --recent | grep -E "(websockify|VNC|PORT|Listening|bind)" || echo "日志检查完成"
+            exit 0
           fi
           
           if [ $i -eq 30 ]; then
