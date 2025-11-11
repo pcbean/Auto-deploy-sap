@@ -104,13 +104,15 @@ jobs:
         else
           echo "APP_NAME=${{ github.event.inputs.app_name }}" >> $GITHUB_ENV
         fi
+        echo "Selected region: ${{ github.event.inputs.region }}, App: $APP_NAME, API: $CF_API"
 
     - name: Login to Cloud Foundry
       run: |
         cf login -a ${{ env.CF_API }} -u "${{ secrets.EMAIL }}" -p "${{ secrets.PASSWORD }}"
-        ORG=$(cf orgs | sed -n '4p')
-        SPACE=$(cf spaces | sed -n '4p')
+        ORG=$(cf orgs | sed -n '4p' | xargs)
+        SPACE=$(cf spaces | sed -n '4p' | xargs)
         cf target -o "$ORG" -s "$SPACE"
+        echo "Logged in to org: $ORG, space: $SPACE"
 
     - name: Deploy application
       run: |
@@ -129,13 +131,15 @@ jobs:
 
     - name: Set environment variables
       run: |
-        # 关键修复: 让 noVNC WebSocket 使用同一个端口
-        cf set-env ${{ env.APP_NAME }} NOVNC_WEBSOCKIFY_PORT '$PORT'
+        # 移除 NOVNC_WEBSOCKIFY_PORT 设置，让镜像默认使用 $PORT 绑定外部端口（解决 websockify 崩溃）
+        # VNC 内部端口保持 5900，本地通信
         cf set-env ${{ env.APP_NAME }} VNC_PORT "5900"
         cf set-env ${{ env.APP_NAME }} VNC_PASSWORD "${{ secrets.VNC_PASSWORD || 'vncpass' }}"
         cf set-env ${{ env.APP_NAME }} VNC_RESOLUTION "${{ secrets.VNC_RESOLUTION || '1280x720' }}"
         cf set-env ${{ env.APP_NAME }} AUTO_START_BROWSER "true"
         cf set-env ${{ env.APP_NAME }} STARTING_WEBSITE_URL "https://www.google.com"
+        cf restage ${{ env.APP_NAME }}  # 重新 staging 应用环境变更，无需重推镜像
+        echo "✅ 环境变量设置并 restage 完成"
 
     - name: Start application
       run: |
@@ -143,19 +147,20 @@ jobs:
         sleep 15
         
         for i in {1..30}; do
-          STATUS=$(cf app ${{ env.APP_NAME }} | grep "requested state:" | awk '{print $3}')
+          STATUS=$(cf app ${{ env.APP_NAME }} | grep "requested state:" | awk '{print $3}' || echo "unknown")
           INSTANCES=$(cf app ${{ env.APP_NAME }} | grep "#0" | awk '{print $2}' || echo "starting")
           
           echo "[$i/30] 状态: $STATUS, 实例: $INSTANCES"
           
           if [ "$STATUS" = "started" ] && [ "$INSTANCES" = "running" ]; then
             echo "✅ 浏览器启动成功!"
-            ROUTE=$(cf app ${{ env.APP_NAME }} | grep "routes:" | awk '{print $2}')
+            ROUTE=$(cf app ${{ env.APP_NAME }} | grep "routes:" | awk '{print $2}' | head -1 || echo "unknown")
             echo ""
             echo "🌐 访问地址: https://$ROUTE"
             echo "🔐 VNC密码: ${{ secrets.VNC_PASSWORD || 'vncpass' }}"
             echo ""
-            echo "💡 打开地址后点击'连接'按钮即可使用浏览器"
+            echo "💡 打开地址后点击'连接'按钮即可使用浏览器（WebSocket 将通过 $PORT 代理到 VNC 5900）"
+            cf logs ${{ env.APP_NAME }} --recent | grep -E "(websockify|VNC|PORT)" || echo "检查日志中 websockify 绑定端口"
             exit 0
           fi
           
