@@ -1,7 +1,7 @@
 name: 自动部署Firefox到SAP
 
 on:
-  workflow_dispatch:  # 只允许手动触发
+  workflow_dispatch:
     inputs:
       region:
         description: '选择部署区域'
@@ -9,10 +9,8 @@ on:
         default: 'US(free)'
         type: choice
         options:
-          #  免费区域
-          - SG(free)  # azure新加披
-          - US(free)  # aws美国    
-          # AWS 区域
+          - SG(free)
+          - US(free)
           - AWS-AU(Sydney)
           - AWS-BR(São Paulo)
           - AWS-KR(Seoul)
@@ -22,7 +20,6 @@ on:
           - AWS-EU(Frankfurt)
           - AWS-JP(Tokyo)
           - AWS-SG(Singapore)
-          # GCP 区域
           - GCP-AU(Sydney)
           - GCP-BR(São Paulo)
           - GCP-US(IA)
@@ -32,7 +29,6 @@ on:
           - GCP-IL(Tel Aviv)
           - GCP-IN(Mumbai)
           - GCP-KSA(Dammam)
-          # Azure 区域
           - Azure-AU(Sydney)
           - Azure-BR(São Paulo)
           - Azure-CA(Montreal)
@@ -41,16 +37,15 @@ on:
           - Azure-EU(Netherlands)
           - Azure-JP(Tokyo)
           - Azure-SG(Singapore)
-          # SAP Neo 区域
           - Neo-UAE(Dubai)
           - Neo-KSA(Riyadh)
       app_name:
-        description: '应用名称（可选，留空则自动生成）'
+        description: '应用名称(可选,留空则自动生成)'
         required: false
         default: ''
 
 env:
-  DOCKER_IMAGE: ${{ secrets.DOCKER_IMAGE || 'ghcr.io/eooce/firefox:latest' }}
+  DOCKER_IMAGE: 'jlesage/firefox:latest'
   MEMORY: ${{ secrets.MEMORY || '1536M' }}
   DISK: ${{ secrets.DISK || '2048M' }}
 
@@ -71,11 +66,9 @@ jobs:
 
     - name: Determine CF API endpoint and app name
       run: |
-        # 设置API端点和生成随机字符串
         RANDOM_STR=$(head /dev/urandom | tr -dc 'a-z' | head -c 6)
         
         case "${{ github.event.inputs.region }}" in
-          # 免费区域
           "SG(free)")
             echo "CF_API=https://api.cf.ap21.hana.ondemand.com" >> $GITHUB_ENV
             echo "APP_NAME=firefox-freesg$RANDOM_STR" >> $GITHUB_ENV
@@ -84,7 +77,6 @@ jobs:
             echo "CF_API=https://api.cf.us10-001.hana.ondemand.com" >> $GITHUB_ENV
             echo "APP_NAME=firefox-freeus$RANDOM_STR" >> $GITHUB_ENV
             ;;
-          # AWS 区域
           "AWS-AU(Sydney)")
             echo "CF_API=https://api.cf.ap10.hana.ondemand.com" >> $GITHUB_ENV
             echo "APP_NAME=firefox-awsau$RANDOM_STR" >> $GITHUB_ENV
@@ -121,8 +113,6 @@ jobs:
             echo "CF_API=https://api.cf.ap11.hana.ondemand.com" >> $GITHUB_ENV
             echo "APP_NAME=firefox-awssg$RANDOM_STR" >> $GITHUB_ENV
             ;;
-          
-          # GCP 区域
           "GCP-AU(Sydney)")
             echo "CF_API=https://api.cf.ap30.hana.ondemand.com" >> $GITHUB_ENV
             echo "APP_NAME=firefox-gcpau$RANDOM_STR" >> $GITHUB_ENV
@@ -159,8 +149,6 @@ jobs:
             echo "CF_API=https://api.cf.sa31.hana.ondemand.com" >> $GITHUB_ENV
             echo "APP_NAME=firefox-gcpsa$RANDOM_STR" >> $GITHUB_ENV
             ;;
-          
-          # Azure 区域
           "Azure-AU(Sydney)")
             echo "CF_API=https://api.cf.ap20.hana.ondemand.com" >> $GITHUB_ENV
             echo "APP_NAME=firefox-azau$RANDOM_STR" >> $GITHUB_ENV
@@ -193,8 +181,6 @@ jobs:
             echo "CF_API=https://api.cf.ap21.hana.ondemand.com" >> $GITHUB_ENV
             echo "APP_NAME=firefox-azsg$RANDOM_STR" >> $GITHUB_ENV
             ;;
-          
-          # SAP Neo 区域
           "Neo-UAE(Dubai)")
             echo "CF_API=https://api.cf.neo-ae1.hana.ondemand.com" >> $GITHUB_ENV
             echo "APP_NAME=firefox-neouae$RANDOM_STR" >> $GITHUB_ENV
@@ -205,86 +191,129 @@ jobs:
             ;;
         esac
         
-        # 如果用户提供了应用名称，则使用用户提供的
         if [ -n "${{ github.event.inputs.app_name }}" ]; then
           echo "APP_NAME=${{ github.event.inputs.app_name }}" >> $GITHUB_ENV
         fi
         
         echo "使用API端点: $CF_API"
         echo "应用名称: $APP_NAME"
-        echo "部署类型: ${{ env.DOCKER_IMAGE }}"
 
     - name: Login to Cloud Foundry
       run: |
         cf login -a ${{ env.CF_API }} -u "${{ secrets.EMAIL }}" -p "${{ secrets.PASSWORD }}"
 
-        # 获取组织列表
         ORG=$(cf orgs | sed -n '4p')
         echo "Selected org: $ORG"
         echo "ORG=$ORG" >> $GITHUB_ENV
 
-        # 获取空间列表
         SPACE=$(cf spaces | sed -n '4p')
         echo "Selected space: $SPACE"
         echo "SPACE=$SPACE" >> $GITHUB_ENV
 
-        # 使用获取的组织和空间重新登录
         cf login -a ${{ env.CF_API }} -u "${{ secrets.EMAIL }}" -p "${{ secrets.PASSWORD }}" -o "$ORG" -s "$SPACE"
 
-    - name: Deploy application
+    - name: Create manifest.yml
       run: |
-        if cf push ${{ env.APP_NAME }} --docker-image ${{ env.DOCKER_IMAGE }} -m ${{ env.MEMORY }} -k ${{ env.DISK }} --health-check-type port; then
-          echo "Deployment successful"
-        else
-          cf delete ${{ env.APP_NAME }} -f
-          echo "伙计,没资源了,部署失败,请明天早上8:10至9:00再尝试部署,已清理失败部署残留"
-          exit 1
+        cat > manifest.yml << EOF
+        applications:
+        - name: ${{ env.APP_NAME }}
+          memory: ${{ env.MEMORY }}
+          disk_quota: ${{ env.DISK }}
+          docker:
+            image: ${{ env.DOCKER_IMAGE }}
+          env:
+            WEB_LISTENING_PORT: ((port))
+            DISPLAY_WIDTH: ${{ secrets.DISPLAY_WIDTH || '1920' }}
+            DISPLAY_HEIGHT: ${{ secrets.DISPLAY_HEIGHT || '1080' }}
+            VNC_PASSWORD: ${{ secrets.VNC_PASSWORD || '123456' }}
+            KEEP_APP_RUNNING: 1
+            ENABLE_CJK_FONT: 1
+        EOF
+        
+        # 添加自定义语言环境(如果设置)
+        if [ -n "${{ secrets.LANG }}" ]; then
+          echo "            LANG: ${{ secrets.LANG }}" >> manifest.yml
         fi
         
-    - name: Set environment variables and restart app
-      run: |
-        # VNC密码和语言环境变量
-        cf set-env ${{ env.APP_NAME }} LANG "${{ secrets.LANG || 'zh_CN.UTF-8' }}"
-        cf set-env ${{ env.APP_NAME }} VNC_PASSWORD "${{ secrets.VNC_PASSWORD || '123456' }}"
-        
-        # 可选：从文件读取环境变量(如果存在)
+        # 从 .env 文件读取额外环境变量
         if [ -f .env ]; then
           while IFS= read -r line; do
             if [[ ! "$line" =~ ^# ]] && [[ -n "$line" ]]; then
               IFS='=' read -r key value <<< "$line"
-              cf set-env ${{ env.APP_NAME }} "$key" "$value"
+              echo "            $key: $value" >> manifest.yml
             fi
           done < .env
         fi
         
-        sleep 3
-        
-        cf restage ${{ env.APP_NAME }}
+        echo "生成的 manifest.yml 内容:"
+        cat manifest.yml
+
+    - name: Deploy application
+      run: |
+        if cf push -f manifest.yml --var port='$PORT'; then
+          echo "✅ 部署成功"
+        else
+          echo "❌ 部署失败,清理残留"
+          cf delete ${{ env.APP_NAME }} -f
+          echo "伙计,没资源了,部署失败,请明天早上8:10至9:00再尝试部署,已清理失败部署残留"
+          exit 1
+        fi
 
     - name: Verify deployment
       run: |
-        STATUS=$(cf app ${{ env.APP_NAME }} | grep "requested state:" | awk '{print $3}')
-        if [ "$STATUS" = "started" ]; then
-          echo "✅ firefox启动成功"
-        else
-          echo "❌ 应用启动失败，当前状态: $STATUS"
-          echo "查看应用日志:"
-          cf logs ${{ env.APP_NAME }} --recent
-          exit 1
-        fi
+        # 等待应用完全启动
+        echo "等待应用启动..."
+        sleep 15
         
+        # 检查应用状态
+        for i in {1..20}; do
+          STATUS=$(cf app ${{ env.APP_NAME }} | grep "requested state:" | awk '{print $3}')
+          INSTANCES=$(cf app ${{ env.APP_NAME }} | grep "#0" | awk '{print $2}')
+          
+          echo "检查 $i/20: 状态=$STATUS, 实例状态=$INSTANCES"
+          
+          if [ "$STATUS" = "started" ] && [ "$INSTANCES" = "running" ]; then
+            echo "✅ Firefox启动成功!"
+            break
+          fi
+          
+          if [ $i -eq 20 ]; then
+            echo "❌ 应用启动超时或失败"
+            echo ""
+            echo "=== 应用详细信息 ==="
+            cf app ${{ env.APP_NAME }}
+            echo ""
+            echo "=== 最近日志 ==="
+            cf logs ${{ env.APP_NAME }} --recent
+            exit 1
+          fi
+          
+          sleep 10
+        done
+
     - name: 详细部署信息
       run: |
         echo "🚀 部署完成！详细信息如下："
-        echo "区域(Region): ${{ github.event.inputs.region }}"
-        echo "组织(ORG): ${{ env.ORG }}"
-        echo "空间(SPACE): ${{ env.SPACE }}"
-        echo "应用名称(App Name): ${{ env.APP_NAME }}"
+        echo "======================================"
+        echo "区域: ${{ github.event.inputs.region }}"
+        echo "组织: ${{ env.ORG }}"
+        echo "空间: ${{ env.SPACE }}"
+        echo "应用名: ${{ env.APP_NAME }}"
+        echo "镜像: ${{ env.DOCKER_IMAGE }}"
+        echo "======================================"
 
-        # 获取应用路由
         ROUTE=$(cf app ${{ env.APP_NAME }} | grep "routes:" | awk '{print $2}')
         if [ -n "$ROUTE" ]; then
-          echo "Firefox—URL: https://$ROUTE"
+          echo ""
+          echo "📍 访问信息:"
+          echo "Web界面: https://$ROUTE"
+          echo "VNC密码: ${{ secrets.VNC_PASSWORD || '123456' }}"
+          echo ""
+          echo "💡 使用提示:"
+          echo "- 直接在浏览器中打开上述URL"
+          echo "- 分辨率: ${{ secrets.DISPLAY_WIDTH || '1920' }}x${{ secrets.DISPLAY_HEIGHT || '1080' }}"
+          echo "- 如无法访问,请等待1-2分钟后重试"
         else
-          echo "⚠️ 未找到应用路由，请检查部署状态。"
+          echo "⚠️ 警告: 未找到应用路由"
+          cf app ${{ env.APP_NAME }}
         fi
