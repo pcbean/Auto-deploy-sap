@@ -45,18 +45,15 @@ on:
         default: ''
 
 env:
-  DOCKER_IMAGE: 'lscr.io/linuxserver/firefox:latest'
-  MEMORY: ${{ secrets.MEMORY || '2048M' }}
-  DISK: ${{ secrets.DISK || '2048M' }}
+  DOCKER_IMAGE: 'mrcolorrain/vnc-browser:alpine'
+  MEMORY: ${{ secrets.MEMORY || '1024M' }}
+  DISK: ${{ secrets.DISK || '1536M' }}
 
 jobs:
   deploy-app:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
     - name: Install CF CLI
       run: |
         wget -q -O - https://packages.cloudfoundry.org/debian/cli.cloudfoundry.org.key | sudo apt-key add -
@@ -102,10 +99,8 @@ jobs:
         esac
         
         echo "CF_API=$CF_API" >> $GITHUB_ENV
-        echo "APP_NAME=${{ github.event.inputs.app_name || format('firefox-{0}{1}', env.APP_PREFIX, env.RANDOM_STR) }}" >> $GITHUB_ENV
-        
         if [ -z "${{ github.event.inputs.app_name }}" ]; then
-          echo "APP_NAME=firefox-$APP_PREFIX$RANDOM_STR" >> $GITHUB_ENV
+          echo "APP_NAME=browser-$APP_PREFIX$RANDOM_STR" >> $GITHUB_ENV
         else
           echo "APP_NAME=${{ github.event.inputs.app_name }}" >> $GITHUB_ENV
         fi
@@ -115,8 +110,6 @@ jobs:
         cf login -a ${{ env.CF_API }} -u "${{ secrets.EMAIL }}" -p "${{ secrets.PASSWORD }}"
         ORG=$(cf orgs | sed -n '4p')
         SPACE=$(cf spaces | sed -n '4p')
-        echo "ORG=$ORG" >> $GITHUB_ENV
-        echo "SPACE=$SPACE" >> $GITHUB_ENV
         cf target -o "$ORG" -s "$SPACE"
 
     - name: Deploy application
@@ -130,37 +123,40 @@ jobs:
           echo "✅ 应用创建成功"
         else
           cf delete ${{ env.APP_NAME }} -f 2>/dev/null || true
-          echo "❌ 部署失败,请稍后重试"
+          echo "❌ 部署失败"
           exit 1
         fi
 
     - name: Set environment variables
       run: |
-        cf set-env ${{ env.APP_NAME }} PUID "1000"
-        cf set-env ${{ env.APP_NAME }} PGID "1000"
-        cf set-env ${{ env.APP_NAME }} TZ "Asia/Shanghai"
-        cf set-env ${{ env.APP_NAME }} CUSTOM_PORT '$PORT'
-        cf set-env ${{ env.APP_NAME }} CUSTOM_HTTPS_PORT "3001"
-        cf set-env ${{ env.APP_NAME }} PASSWORD "${{ secrets.VNC_PASSWORD || 'abc' }}"
-        cf set-env ${{ env.APP_NAME }} CUSTOM_USER "${{ secrets.CUSTOM_USER || 'abc' }}"
+        cf set-env ${{ env.APP_NAME }} VNC_PORT '$PORT'
+        cf set-env ${{ env.APP_NAME }} NOVNC_PORT '$PORT'
+        cf set-env ${{ env.APP_NAME }} VNC_PASSWORD "${{ secrets.VNC_PASSWORD || 'vncpass' }}"
+        cf set-env ${{ env.APP_NAME }} VNC_RESOLUTION "1280x720"
+        cf set-env ${{ env.APP_NAME }} AUTO_START_BROWSER "true"
+        cf set-env ${{ env.APP_NAME }} STARTING_WEBSITE_URL "https://www.google.com"
 
     - name: Start application
       run: |
         cf start ${{ env.APP_NAME }}
-        sleep 20
+        sleep 15
         
-        for i in {1..40}; do
+        for i in {1..30}; do
           STATUS=$(cf app ${{ env.APP_NAME }} | grep "requested state:" | awk '{print $3}')
           INSTANCES=$(cf app ${{ env.APP_NAME }} | grep "#0" | awk '{print $2}' || echo "starting")
           
-          echo "[$i/40] 状态: $STATUS, 实例: $INSTANCES"
+          echo "[$i/30] 状态: $STATUS, 实例: $INSTANCES"
           
           if [ "$STATUS" = "started" ] && [ "$INSTANCES" = "running" ]; then
-            echo "✅ Firefox 启动成功!"
-            break
+            echo "✅ 浏览器启动成功!"
+            ROUTE=$(cf app ${{ env.APP_NAME }} | grep "routes:" | awk '{print $2}')
+            echo ""
+            echo "🌐 访问地址: https://$ROUTE"
+            echo "🔐 VNC密码: ${{ secrets.VNC_PASSWORD || 'vncpass' }}"
+            exit 0
           fi
           
-          if [ $i -eq 40 ]; then
+          if [ $i -eq 30 ]; then
             echo "❌ 启动超时"
             cf logs ${{ env.APP_NAME }} --recent
             exit 1
@@ -168,19 +164,3 @@ jobs:
           
           sleep 5
         done
-
-    - name: 部署信息
-      run: |
-        echo ""
-        echo "🎉 Firefox 部署成功!"
-        echo "区域: ${{ github.event.inputs.region }}"
-        echo "应用: ${{ env.APP_NAME }}"
-        echo ""
-        ROUTE=$(cf app ${{ env.APP_NAME }} | grep "routes:" | awk '{print $2}')
-        if [ -n "$ROUTE" ]; then
-          echo "🌐 访问地址: https://$ROUTE"
-          echo "🔐 用户名: ${{ secrets.CUSTOM_USER || 'abc' }}"
-          echo "🔐 密码: ${{ secrets.VNC_PASSWORD || 'abc' }}"
-          echo ""
-          echo "💡 通过浏览器访问 HTTPS 地址即可使用 Firefox"
-        fi
