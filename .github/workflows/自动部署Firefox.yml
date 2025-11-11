@@ -201,30 +201,24 @@ jobs:
 
     - name: Login to Cloud Foundry and get org/space
       run: |
-        # 第一次登录获取组织和空间
         cf login -a ${{ env.CF_API }} -u "${{ secrets.EMAIL }}" -p "${{ secrets.PASSWORD }}"
 
-        # 获取第一个组织和空间
         ORG=$(cf orgs | sed -n '4p')
         SPACE=$(cf spaces | sed -n '4p')
         
         echo "检测到组织: $ORG"
         echo "检测到空间: $SPACE"
         
-        # 保存到环境变量
         echo "ORG=$ORG" >> $GITHUB_ENV
         echo "SPACE=$SPACE" >> $GITHUB_ENV
         
-        # 使用组织和空间重新登录并设置 target
         cf login -a ${{ env.CF_API }} -u "${{ secrets.EMAIL }}" -p "${{ secrets.PASSWORD }}" -o "$ORG" -s "$SPACE"
         
-        # 验证 target 设置
         echo "当前 Cloud Foundry target:"
         cf target
 
     - name: Deploy application
       run: |
-        # jlesage/firefox 需要使用 process 健康检查
         if cf push ${{ env.APP_NAME }} \
           --docker-image ${{ env.DOCKER_IMAGE }} \
           -m ${{ env.MEMORY }} \
@@ -243,7 +237,18 @@ jobs:
         # 关键: 让 Firefox 监听 CF 动态分配的端口
         cf set-env ${{ env.APP_NAME }} WEB_LISTENING_PORT '$PORT'
         
-        # jlesage/firefox 其他环境变量
+        # 修复 Cloud Foundry 只读文件系统问题
+        cf set-env ${{ env.APP_NAME }} TMPDIR "/home/vcap/tmp"
+        cf set-env ${{ env.APP_NAME }} XDG_RUNTIME_DIR "/home/vcap/tmp"
+        cf set-env ${{ env.APP_NAME }} XDG_CACHE_HOME "/home/vcap/tmp/.cache"
+        cf set-env ${{ env.APP_NAME }} XDG_CONFIG_HOME "/home/vcap/app/.config"
+        cf set-env ${{ env.APP_NAME }} XDG_DATA_HOME "/home/vcap/app/.local/share"
+        cf set-env ${{ env.APP_NAME }} XDG_STATE_HOME "/home/vcap/app/.local/state"
+        
+        # 跳过 s6-overlay 的 tmp 清理步骤
+        cf set-env ${{ env.APP_NAME }} S6_READ_ONLY_ROOT "1"
+        
+        # jlesage/firefox 核心环境变量
         cf set-env ${{ env.APP_NAME }} DISPLAY_WIDTH "${{ secrets.DISPLAY_WIDTH || '1920' }}"
         cf set-env ${{ env.APP_NAME }} DISPLAY_HEIGHT "${{ secrets.DISPLAY_HEIGHT || '1080' }}"
         cf set-env ${{ env.APP_NAME }} VNC_PASSWORD "${{ secrets.VNC_PASSWORD || '123456' }}"
