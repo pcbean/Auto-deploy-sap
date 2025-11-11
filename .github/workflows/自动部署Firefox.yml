@@ -219,6 +219,45 @@ jobs:
 
     - name: Create manifest and deploy
       run: |
+        # 创建启动脚本
+        cat > start.sh << 'STARTSCRIPT'
+        #!/bin/sh
+        set -e
+        
+        # 创建必要的目录
+        mkdir -p /home/vcap/tmp /home/vcap/app/.cache /home/vcap/app/.config /home/vcap/app/.local/share /home/vcap/app/.local/state
+        
+        # 设置环境变量
+        export TMPDIR=/home/vcap/tmp
+        export TMP=/home/vcap/tmp
+        export TEMP=/home/vcap/tmp
+        export XDG_RUNTIME_DIR=/home/vcap/tmp
+        export XDG_CACHE_HOME=/home/vcap/tmp/.cache
+        export XDG_CONFIG_HOME=/home/vcap/app/.config
+        export XDG_DATA_HOME=/home/vcap/app/.local/share
+        export XDG_STATE_HOME=/home/vcap/app/.local/state
+        
+        # 查找并执行 init 脚本
+        if [ -f /init ]; then
+            echo "Found /init, executing..."
+            exec /init
+        elif [ -f /usr/local/bin/init ]; then
+            echo "Found /usr/local/bin/init, executing..."
+            exec /usr/local/bin/init
+        else
+            echo "No init script found, starting services manually..."
+            # 直接启动 supervisord 或其他进程管理器
+            if [ -f /usr/bin/supervisord ]; then
+                exec /usr/bin/supervisord -c /etc/supervisor/supervisord.conf
+            else
+                echo "ERROR: Cannot find init script or supervisord"
+                sleep 3600
+            fi
+        fi
+        STARTSCRIPT
+        
+        chmod +x start.sh
+        
         # 创建 manifest.yml 文件
         cat > manifest.yml << 'EOF'
         applications:
@@ -228,20 +267,18 @@ jobs:
           memory: $MEMORY_PLACEHOLDER
           disk_quota: $DISK_PLACEHOLDER
           health-check-type: process
-          command: |
-            mkdir -p /home/vcap/tmp /home/vcap/app/.cache /home/vcap/app/.config /home/vcap/app/.local/share /home/vcap/app/.local/state && \
-            export TMPDIR=/home/vcap/tmp && \
-            export TMP=/home/vcap/tmp && \
-            export TEMP=/home/vcap/tmp && \
-            export XDG_RUNTIME_DIR=/home/vcap/tmp && \
-            export XDG_CACHE_HOME=/home/vcap/tmp/.cache && \
-            export XDG_CONFIG_HOME=/home/vcap/app/.config && \
-            export XDG_DATA_HOME=/home/vcap/app/.local/share && \
-            export XDG_STATE_HOME=/home/vcap/app/.local/state && \
-            /init
           env:
+            TMPDIR: /home/vcap/tmp
+            TMP: /home/vcap/tmp
+            TEMP: /home/vcap/tmp
+            XDG_RUNTIME_DIR: /home/vcap/tmp
+            XDG_CACHE_HOME: /home/vcap/tmp/.cache
+            XDG_CONFIG_HOME: /home/vcap/app/.config
+            XDG_DATA_HOME: /home/vcap/app/.local/share
+            XDG_STATE_HOME: /home/vcap/app/.local/state
             WEB_LISTENING_PORT: $PORT
             S6_READ_ONLY_ROOT: "1"
+            S6_LOGGING: "0"
             DISPLAY_WIDTH: "$DISPLAY_WIDTH_PLACEHOLDER"
             DISPLAY_HEIGHT: "$DISPLAY_HEIGHT_PLACEHOLDER"
             VNC_PASSWORD: "$VNC_PASSWORD_PLACEHOLDER"
@@ -262,8 +299,13 @@ jobs:
         cat manifest.yml
         echo "=========================="
         
-        # 部署应用
-        if cf push -f manifest.yml --no-start; then
+        # 部署应用(不使用 manifest,直接用 cf push 参数)
+        if cf push ${{ env.APP_NAME }} \
+          --docker-image ${{ env.DOCKER_IMAGE }} \
+          -m ${{ env.MEMORY }} \
+          -k ${{ env.DISK }} \
+          --health-check-type process \
+          --no-start; then
           echo "✅ 应用创建成功"
         else
           cf delete ${{ env.APP_NAME }} -f 2>/dev/null || true
@@ -271,9 +313,35 @@ jobs:
           exit 1
         fi
 
-    - name: Set additional environment variables
+    - name: Set environment variables
       run: |
-        # 如果有自定义 LANG 设置
+        # 设置临时目录环境变量
+        cf set-env ${{ env.APP_NAME }} TMPDIR "/home/vcap/tmp"
+        cf set-env ${{ env.APP_NAME }} TMP "/home/vcap/tmp"
+        cf set-env ${{ env.APP_NAME }} TEMP "/home/vcap/tmp"
+        
+        # 设置 XDG 路径
+        cf set-env ${{ env.APP_NAME }} XDG_RUNTIME_DIR "/home/vcap/tmp"
+        cf set-env ${{ env.APP_NAME }} XDG_CACHE_HOME "/home/vcap/tmp/.cache"
+        cf set-env ${{ env.APP_NAME }} XDG_CONFIG_HOME "/home/vcap/app/.config"
+        cf set-env ${{ env.APP_NAME }} XDG_DATA_HOME "/home/vcap/app/.local/share"
+        cf set-env ${{ env.APP_NAME }} XDG_STATE_HOME "/home/vcap/app/.local/state"
+        
+        # s6-overlay 配置
+        cf set-env ${{ env.APP_NAME }} S6_READ_ONLY_ROOT "1"
+        cf set-env ${{ env.APP_NAME }} S6_LOGGING "0"
+        
+        # 端口绑定
+        cf set-env ${{ env.APP_NAME }} WEB_LISTENING_PORT '$PORT'
+        
+        # Firefox 配置
+        cf set-env ${{ env.APP_NAME }} DISPLAY_WIDTH "${{ secrets.DISPLAY_WIDTH || '1920' }}"
+        cf set-env ${{ env.APP_NAME }} DISPLAY_HEIGHT "${{ secrets.DISPLAY_HEIGHT || '1080' }}"
+        cf set-env ${{ env.APP_NAME }} VNC_PASSWORD "${{ secrets.VNC_PASSWORD || '123456' }}"
+        cf set-env ${{ env.APP_NAME }} KEEP_APP_RUNNING "1"
+        cf set-env ${{ env.APP_NAME }} ENABLE_CJK_FONT "1"
+        
+        # 可选: 中文语言支持
         if [ -n "${{ secrets.LANG }}" ]; then
           cf set-env ${{ env.APP_NAME }} LANG "${{ secrets.LANG }}"
         fi
@@ -296,28 +364,31 @@ jobs:
         cf start ${{ env.APP_NAME }}
         
         echo "等待应用启动..."
-        sleep 15
+        sleep 20
         
         # 检查应用状态
-        for i in {1..30}; do
+        for i in {1..40}; do
           STATUS=$(cf app ${{ env.APP_NAME }} | grep "requested state:" | awk '{print $3}')
           INSTANCES=$(cf app ${{ env.APP_NAME }} | grep "#0" | awk '{print $2}' || echo "starting")
           
-          echo "[$i/30] 状态: $STATUS, 实例: $INSTANCES"
+          echo "[$i/40] 状态: $STATUS, 实例: $INSTANCES"
           
           if [ "$STATUS" = "started" ] && [ "$INSTANCES" = "running" ]; then
             echo "✅ Firefox 启动成功!"
             break
           fi
           
-          if [ $i -eq 30 ]; then
-            echo "❌ 应用启动超时"
+          if [ $i -eq 40 ]; then
+            echo "❌ 应用启动超时,查看日志..."
             echo ""
             echo "=== 应用信息 ==="
             cf app ${{ env.APP_NAME }}
             echo ""
             echo "=== 最近日志 ==="
             cf logs ${{ env.APP_NAME }} --recent
+            echo ""
+            echo "=== 尝试查看环境变量 ==="
+            cf env ${{ env.APP_NAME }}
             exit 1
           fi
           
