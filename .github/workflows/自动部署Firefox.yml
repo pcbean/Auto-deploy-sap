@@ -45,8 +45,8 @@ on:
         default: ''
 
 env:
-  DOCKER_IMAGE: 'mrcolorrain/vnc-browser:debian'
-  MEMORY: ${{ secrets.MEMORY || '2048M' }}  # 增加到 2048M，避免资源不足
+  DOCKER_IMAGE: 'mrcolorrain/vnc-browser:debian'  # 切回 debian
+  MEMORY: ${{ secrets.MEMORY || '2048M' }}  # debian 需更多内存
   DISK: ${{ secrets.DISK || '1536M' }}
 
 jobs:
@@ -54,12 +54,12 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Install CF CLI and jq
+    - name: Install CF CLI and tools
       run: |
         wget -q -O - https://packages.cloudfoundry.org/debian/cli.cloudfoundry.org.key | sudo apt-key add -
         echo "deb https://packages.cloudfoundry.org/debian stable main" | sudo tee /etc/apt/sources.list.d/cloudfoundry-cli.list
         sudo apt-get update
-        sudo apt-get install -y cf8-cli jq
+        sudo apt-get install -y cf8-cli jq curl  # jq/curl 用于检查和测试
 
     - name: Determine CF API endpoint and app name
       run: |
@@ -129,68 +129,62 @@ jobs:
           echo "✅ 应用创建成功"
         else
           echo "❌ 部署失败"
-          exit 1
+          exit 1  # 无自动 delete
         fi
 
     - name: Set environment variables
       run: |
-        # 核心修复：重置 NOVNC 端口，让镜像 fallback 到 $PORT；添加 websockify 绑定变量
-        cf set-env ${{ env.APP_NAME }} NOVNC_PORT ""  # 重置 noVNC 端口，默认用 $PORT
-        cf set-env ${{ env.APP_NAME }} WEBSOCKIFY_BIND "0.0.0.0"  # 全接口监听
-        cf set-env ${{ env.APP_NAME }} WEBSOCKIFY_PORT "$PORT"  # 强制 websockify 使用 $PORT
-        cf set-env ${{ env.APP_NAME }} WEBSOCKIFY_TARGET "localhost:5900"  # VNC 内部目标
-        cf set-env ${{ env.APP_NAME }} VNC_PORT "5900"  # 内部 VNC 端口
+        # 模仿 alpine 关键修复：NOVNC_WEBSOCKIFY_PORT 用单引号，让 debian 运行时替换 $PORT
+        cf set-env ${{ env.APP_NAME }} NOVNC_WEBSOCKIFY_PORT '$PORT'
+        cf set-env ${{ env.APP_NAME }} VNC_PORT "5900"
         cf set-env ${{ env.APP_NAME }} VNC_PASSWORD "${{ secrets.VNC_PASSWORD || 'vncpass' }}"
         cf set-env ${{ env.APP_NAME }} VNC_RESOLUTION "${{ secrets.VNC_RESOLUTION || '1280x720' }}"
         cf set-env ${{ env.APP_NAME }} AUTO_START_BROWSER "true"
         cf set-env ${{ env.APP_NAME }} STARTING_WEBSITE_URL "https://www.google.com"
-        cf restage ${{ env.APP_NAME }}  # 应用变更
-        sleep 10  # 等待 restage 完成
-        echo "✅ 环境变量设置并 restage 完成"
+        # 添加绑定全接口（如果 debian 支持）
+        cf set-env ${{ env.APP_NAME }} WEBSOCKIFY_BIND "0.0.0.0"
+        echo "✅ 环境变量设置完成（无 restage，运行时生效）"
 
     - name: Check Detailed Logs
       run: |
-        sleep 5  # 短暂等待日志生成
-        cf logs ${{ env.APP_NAME }} --recent | grep -E "(error|websockify|PORT|bind|502|VNC|Listening)" || echo "警告：未见关键日志，可能需自定义镜像"
-        cf app ${{ env.APP_NAME }} | grep -E "(state|instances|ports|requested state)"
+        sleep 5
+        cf logs ${{ env.APP_NAME }} --recent | grep -E "(websockify|VNC|PORT|Listening|bind|error)" || echo "日志检查：无明显错误"
 
     - name: Start application
       run: |
         cf start ${{ env.APP_NAME }}
-        sleep 20  # 增加等待时间，让 websockify 启动
+        sleep 15  # 初始等待，debian 启动稍慢
         
-        for i in {1..40}; do  # 延长超时到 200s
-          STATUS=$(cf app ${{ env.APP_NAME }} --json | jq -r '.requested_state // empty' || echo "unknown")
-          INSTANCES=$(cf app ${{ env.APP_NAME }} --json | jq -r '[.instances[] | select(.state == "RUNNING")] | length' || echo "0")
+        for i in {1..30}; do
+          STATUS=$(cf app ${{ env.APP_NAME }} --json | jq -r '.requested_state // empty' || cf app ${{ env.APP_NAME }} | grep "requested state:" | awk '{print $3}')
+          INSTANCES=$(cf app ${{ env.APP_NAME }} --json | jq -r '[.instances[] | select(.state == "RUNNING")] | length // 0' || cf app ${{ env.APP_NAME }} | grep "#0" | awk '{print $2}' || echo "starting")
           
-          echo "[$i/40] 状态: $STATUS, 运行实例数: $INSTANCES"
+          echo "[$i/30] 状态: $STATUS, 实例: $INSTANCES"
           
-          if [ "$STATUS" = "STARTED" ] && [ "$INSTANCES" -gt 0 ]; then
-            echo "✅ 浏览器启动成功!"
-            ROUTE=$(cf app ${{ env.APP_NAME }} | grep "routes:" | awk '{print $2}' | head -1 || echo "unknown")
-            echo ""
-            echo "🌐 访问地址: https://$ROUTE"
-            echo "🔐 VNC密码: ${{ secrets.VNC_PASSWORD || 'vncpass' }}"
-            echo ""
-            echo "💡 打开地址后点击'连接'按钮即可使用浏览器"
-            # 输出关键日志检查 websockify
-            cf logs ${{ env.APP_NAME }} --recent | grep -E "(websockify|VNC|PORT|Listening)" || echo "警告：未见 websockify 绑定日志，可能需自定义镜像"
-            exit 0
+          if [ "$STATUS" = "STARTED" ] || [ "$STATUS" = "started" ]; then
+            if [ "$INSTANCES" = "1" ] || [ "$INSTANCES" = "running" ]; then
+              echo "✅ 浏览器启动成功!"
+              ROUTE=$(cf app ${{ env.APP_NAME }} | grep -E "(routes:|urls:)" | awk '{print $2}' | head -1 | sed 's/,//' || echo "unknown")
+              if [ "$ROUTE" != "unknown" ]; then
+                RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" -m 10 https://$ROUTE || echo "timeout")
+                echo "HTTP 测试响应: $RESPONSE (200 表示无 502)"
+              fi
+              echo ""
+              echo "🌐 访问地址: https://$ROUTE"
+              echo "🔐 VNC密码: ${{ secrets.VNC_PASSWORD || 'vncpass' }}"
+              echo ""
+              echo "💡 打开地址后点击'连接'按钮即可使用浏览器"
+              cf logs ${{ env.APP_NAME }} --recent | grep -E "(websockify|VNC|PORT|Listening)" || echo "日志检查完成"
+              exit 0
+            fi
           fi
           
-          if [ $i -eq 40 ]; then
+          if [ $i -eq 30 ]; then
             echo "❌ 启动超时"
             cf logs ${{ env.APP_NAME }} --recent
-            cf events ${{ env.APP_NAME }}  # 添加事件日志
+            cf events ${{ env.APP_NAME }}
             exit 1
           fi
           
           sleep 5
         done
-
-    - name: Switch to HTTP Health Check
-      if: always()  # 即使失败也尝试设置
-      run: |
-        cf set-health-check-type ${{ env.APP_NAME }} http --endpoint / || echo "健康检查设置失败"
-        cf restage ${{ env.APP_NAME }} || echo "Restage 失败"
-        echo "切换到 HTTP 健康检查完成"
