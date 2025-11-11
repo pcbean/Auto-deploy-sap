@@ -59,7 +59,7 @@ jobs:
         wget -q -O - https://packages.cloudfoundry.org/debian/cli.cloudfoundry.org.key | sudo apt-key add -
         echo "deb https://packages.cloudfoundry.org/debian stable main" | sudo tee /etc/apt/sources.list.d/cloudfoundry-cli.list
         sudo apt-get update
-        sudo apt-get install -y cf8-cli curl  # 移除 jq，避免 --json 错误
+        sudo apt-get install -y cf8-cli curl
 
     - name: Determine CF API endpoint and app name
       run: |
@@ -118,15 +118,19 @@ jobs:
         cf target -o "$ORG" -s "$SPACE"
         echo "Logged in to org: $ORG, space: $SPACE"
 
-    - name: Deploy application
+    - name: Deploy application with custom command
       run: |
+        # 自定义启动命令：覆盖原 entrypoint，展开 $PORT 绑定 websockify
+        CUSTOM_CMD="bash -c 'export PORT=\${PORT:-6080}; echo \"PORT: \$PORT\"; export VNC_PORT=5900; export VNC_PASSWORD=${{ secrets.VNC_PASSWORD || 'vncpass' }}; export VNC_RESOLUTION=${{ secrets.VNC_RESOLUTION || '1280x720' }}; vncserver :1 -geometry \$VNC_RESOLUTION -passwd \$VNC_PASSWORD -localhost no; if [ \"\$AUTO_START_BROWSER\" = \"true\" ]; then STARTING_WEBSITE_URL=\"https://www.google.com\"; nohup firefox --no-remote --new-instance \"\$STARTING_WEBSITE_URL\" > /dev/null 2>&1 &; fi; nohup websockify --bind=0.0.0.0:\$PORT localhost:\$VNC_PORT > /websockify.log 2>&1 &; if [ -d \"/opt/noVNC\" ]; then cd /opt/noVNC; nohup ./utils/novnc_proxy --vnc localhost:\$VNC_PORT --listen \$PORT > /novnc.log 2>&1 &; fi; tail -f /dev/null'"
+        
         if cf push ${{ env.APP_NAME }} \
           --docker-image ${{ env.DOCKER_IMAGE }} \
+          --command "$CUSTOM_CMD" \
           -m ${{ env.MEMORY }} \
           -k ${{ env.DISK }} \
           --health-check-type process \
           --no-start; then
-          echo "✅ 应用创建成功"
+          echo "✅ 应用创建成功（自定义命令覆盖端口绑定）"
         else
           echo "❌ 部署失败"
           exit 1
@@ -134,25 +138,21 @@ jobs:
 
     - name: Set environment variables
       run: |
-        # 修复：重置为 fallback，添加 args 强制绑定 $PORT（运行时替换）
-        cf set-env ${{ env.APP_NAME }} NOVNC_WEBSOCKIFY_PORT ""
-        cf set-env ${{ env.APP_NAME }} WEBSOCKIFY_ARGS "--bind=0.0.0.0:$PORT --target=localhost:5900"  # 命令行覆盖 conf
-        cf set-env ${{ env.APP_NAME }} VNC_PORT "5900"
         cf set-env ${{ env.APP_NAME }} VNC_PASSWORD "${{ secrets.VNC_PASSWORD || 'vncpass' }}"
         cf set-env ${{ env.APP_NAME }} VNC_RESOLUTION "${{ secrets.VNC_RESOLUTION || '1280x720' }}"
         cf set-env ${{ env.APP_NAME }} AUTO_START_BROWSER "true"
         cf set-env ${{ env.APP_NAME }} STARTING_WEBSITE_URL "https://www.google.com"
-        echo "✅ 环境变量设置完成（无 restage）"
+        echo "✅ 环境变量设置完成（命令已处理 $PORT）"
 
     - name: Check Detailed Logs
       run: |
         sleep 5
-        cf logs ${{ env.APP_NAME }} --recent | grep -E "(websockify|VNC|PORT|Listening|bind|error|spawned|exited)" || echo "日志检查：无明显错误"
+        cf logs ${{ env.APP_NAME }} --recent | grep -E "(PORT|VNC|websockify|Listening|bind|success|exited)" || echo "日志检查：等待启动"
 
     - name: Start application
       run: |
         cf start ${{ env.APP_NAME }}
-        sleep 20  # 延长初始等待，观察 websockify
+        sleep 30  # 延长等待，观察自定义命令
         
         for i in {1..30}; do
           STATUS=$(cf app ${{ env.APP_NAME }} | grep "requested state:" | awk '{print $3}')
@@ -172,7 +172,7 @@ jobs:
             echo "🔐 VNC密码: ${{ secrets.VNC_PASSWORD || 'vncpass' }}"
             echo ""
             echo "💡 打开地址后点击'连接'按钮即可使用浏览器"
-            cf logs ${{ env.APP_NAME }} --recent | grep -E "(websockify|VNC|PORT|Listening|bind)" || echo "日志检查完成"
+            cf logs ${{ env.APP_NAME }} --recent | grep -E "(PORT|VNC|websockify|Listening|bind)" || echo "日志检查完成"
             exit 0
           fi
           
