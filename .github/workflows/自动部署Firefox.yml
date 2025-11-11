@@ -129,10 +129,11 @@ jobs:
 
     - name: Set environment variables
       run: |
-        cf set-env ${{ env.APP_NAME }} VNC_PORT '$PORT'
-        cf set-env ${{ env.APP_NAME }} NOVNC_PORT '$PORT'
+        # 关键修复: 让 noVNC WebSocket 使用同一个端口
+        cf set-env ${{ env.APP_NAME }} NOVNC_WEBSOCKIFY_PORT '$PORT'
+        cf set-env ${{ env.APP_NAME }} VNC_PORT "5900"
         cf set-env ${{ env.APP_NAME }} VNC_PASSWORD "${{ secrets.VNC_PASSWORD || 'vncpass' }}"
-        cf set-env ${{ env.APP_NAME }} VNC_RESOLUTION "1280x720"
+        cf set-env ${{ env.APP_NAME }} VNC_RESOLUTION "${{ secrets.VNC_RESOLUTION || '1280x720' }}"
         cf set-env ${{ env.APP_NAME }} AUTO_START_BROWSER "true"
         cf set-env ${{ env.APP_NAME }} STARTING_WEBSITE_URL "https://www.google.com"
 
@@ -153,6 +154,8 @@ jobs:
             echo ""
             echo "🌐 访问地址: https://$ROUTE"
             echo "🔐 VNC密码: ${{ secrets.VNC_PASSWORD || 'vncpass' }}"
+            echo ""
+            echo "💡 打开地址后点击'连接'按钮即可使用浏览器"
             exit 0
           fi
           
