@@ -103,7 +103,7 @@ jobs:
             ;;
           "AWS-EU(Frankfurt)")
             echo "CF_API=https://api.cf.eu10-005.hana.ondemand.com" >> $GITHUB_ENV
-            echo "APP_NAME=firefox-waseu$RANDOM_STR" >> $GITHUB_ENV
+            echo "APP_NAME=firefox-awseu$RANDOM_STR" >> $GITHUB_ENV
             ;;
           "AWS-JP(Tokyo)")
             echo "CF_API=https://api.cf.jp10.hana.ondemand.com" >> $GITHUB_ENV
@@ -217,45 +217,63 @@ jobs:
         echo "当前 Cloud Foundry target:"
         cf target
 
-    - name: Deploy application
+    - name: Create manifest and deploy
       run: |
-        if cf push ${{ env.APP_NAME }} \
-          --docker-image ${{ env.DOCKER_IMAGE }} \
-          -m ${{ env.MEMORY }} \
-          -k ${{ env.DISK }} \
-          --health-check-type process \
-          --no-start; then
+        # 创建 manifest.yml 文件
+        cat > manifest.yml << 'EOF'
+        applications:
+        - name: $APP_NAME_PLACEHOLDER
+          docker:
+            image: $DOCKER_IMAGE_PLACEHOLDER
+          memory: $MEMORY_PLACEHOLDER
+          disk_quota: $DISK_PLACEHOLDER
+          health-check-type: process
+          command: |
+            mkdir -p /home/vcap/tmp /home/vcap/app/.cache /home/vcap/app/.config /home/vcap/app/.local/share /home/vcap/app/.local/state && \
+            export TMPDIR=/home/vcap/tmp && \
+            export TMP=/home/vcap/tmp && \
+            export TEMP=/home/vcap/tmp && \
+            export XDG_RUNTIME_DIR=/home/vcap/tmp && \
+            export XDG_CACHE_HOME=/home/vcap/tmp/.cache && \
+            export XDG_CONFIG_HOME=/home/vcap/app/.config && \
+            export XDG_DATA_HOME=/home/vcap/app/.local/share && \
+            export XDG_STATE_HOME=/home/vcap/app/.local/state && \
+            /init
+          env:
+            WEB_LISTENING_PORT: $PORT
+            S6_READ_ONLY_ROOT: "1"
+            DISPLAY_WIDTH: "$DISPLAY_WIDTH_PLACEHOLDER"
+            DISPLAY_HEIGHT: "$DISPLAY_HEIGHT_PLACEHOLDER"
+            VNC_PASSWORD: "$VNC_PASSWORD_PLACEHOLDER"
+            KEEP_APP_RUNNING: "1"
+            ENABLE_CJK_FONT: "1"
+        EOF
+        
+        # 替换占位符
+        sed -i "s|\$APP_NAME_PLACEHOLDER|${{ env.APP_NAME }}|g" manifest.yml
+        sed -i "s|\$DOCKER_IMAGE_PLACEHOLDER|${{ env.DOCKER_IMAGE }}|g" manifest.yml
+        sed -i "s|\$MEMORY_PLACEHOLDER|${{ env.MEMORY }}|g" manifest.yml
+        sed -i "s|\$DISK_PLACEHOLDER|${{ env.DISK }}|g" manifest.yml
+        sed -i "s|\$DISPLAY_WIDTH_PLACEHOLDER|${{ secrets.DISPLAY_WIDTH || '1920' }}|g" manifest.yml
+        sed -i "s|\$DISPLAY_HEIGHT_PLACEHOLDER|${{ secrets.DISPLAY_HEIGHT || '1080' }}|g" manifest.yml
+        sed -i "s|\$VNC_PASSWORD_PLACEHOLDER|${{ secrets.VNC_PASSWORD || '123456' }}|g" manifest.yml
+        
+        echo "=== 生成的 manifest.yml ==="
+        cat manifest.yml
+        echo "=========================="
+        
+        # 部署应用
+        if cf push -f manifest.yml --no-start; then
           echo "✅ 应用创建成功"
         else
           cf delete ${{ env.APP_NAME }} -f 2>/dev/null || true
           echo "❌ 伙计,没资源了,部署失败,请明天早上8:10至9:00再尝试部署,已清理失败部署残留"
           exit 1
         fi
-        
-    - name: Set environment variables
+
+    - name: Set additional environment variables
       run: |
-        # 关键: 让 Firefox 监听 CF 动态分配的端口
-        cf set-env ${{ env.APP_NAME }} WEB_LISTENING_PORT '$PORT'
-        
-        # 修复 Cloud Foundry 只读文件系统问题
-        cf set-env ${{ env.APP_NAME }} TMPDIR "/home/vcap/tmp"
-        cf set-env ${{ env.APP_NAME }} XDG_RUNTIME_DIR "/home/vcap/tmp"
-        cf set-env ${{ env.APP_NAME }} XDG_CACHE_HOME "/home/vcap/tmp/.cache"
-        cf set-env ${{ env.APP_NAME }} XDG_CONFIG_HOME "/home/vcap/app/.config"
-        cf set-env ${{ env.APP_NAME }} XDG_DATA_HOME "/home/vcap/app/.local/share"
-        cf set-env ${{ env.APP_NAME }} XDG_STATE_HOME "/home/vcap/app/.local/state"
-        
-        # 跳过 s6-overlay 的 tmp 清理步骤
-        cf set-env ${{ env.APP_NAME }} S6_READ_ONLY_ROOT "1"
-        
-        # jlesage/firefox 核心环境变量
-        cf set-env ${{ env.APP_NAME }} DISPLAY_WIDTH "${{ secrets.DISPLAY_WIDTH || '1920' }}"
-        cf set-env ${{ env.APP_NAME }} DISPLAY_HEIGHT "${{ secrets.DISPLAY_HEIGHT || '1080' }}"
-        cf set-env ${{ env.APP_NAME }} VNC_PASSWORD "${{ secrets.VNC_PASSWORD || '123456' }}"
-        cf set-env ${{ env.APP_NAME }} KEEP_APP_RUNNING "1"
-        cf set-env ${{ env.APP_NAME }} ENABLE_CJK_FONT "1"
-        
-        # 可选: 中文语言支持
+        # 如果有自定义 LANG 设置
         if [ -n "${{ secrets.LANG }}" ]; then
           cf set-env ${{ env.APP_NAME }} LANG "${{ secrets.LANG }}"
         fi
