@@ -1,7 +1,7 @@
 name: 自动部署Firefox到SAP
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:  # 只允许手动触发
     inputs:
       region:
         description: '选择部署区域'
@@ -9,8 +9,10 @@ on:
         default: 'US(free)'
         type: choice
         options:
-          - SG(free)
-          - US(free)
+          #  免费区域
+          - SG(free)  # azure新加披
+          - US(free)  # aws美国    
+          # AWS 区域
           - AWS-AU(Sydney)
           - AWS-BR(São Paulo)
           - AWS-KR(Seoul)
@@ -20,6 +22,7 @@ on:
           - AWS-EU(Frankfurt)
           - AWS-JP(Tokyo)
           - AWS-SG(Singapore)
+          # GCP 区域
           - GCP-AU(Sydney)
           - GCP-BR(São Paulo)
           - GCP-US(IA)
@@ -29,6 +32,7 @@ on:
           - GCP-IL(Tel Aviv)
           - GCP-IN(Mumbai)
           - GCP-KSA(Dammam)
+          # Azure 区域
           - Azure-AU(Sydney)
           - Azure-BR(São Paulo)
           - Azure-CA(Montreal)
@@ -37,151 +41,250 @@ on:
           - Azure-EU(Netherlands)
           - Azure-JP(Tokyo)
           - Azure-SG(Singapore)
+          # SAP Neo 区域
           - Neo-UAE(Dubai)
           - Neo-KSA(Riyadh)
       app_name:
-        description: '应用名称(可选,留空则自动生成)'
+        description: '应用名称（可选，留空则自动生成）'
         required: false
         default: ''
 
 env:
-  DOCKER_IMAGE: 'mrcolorrain/vnc-browser:debian'
-  MEMORY: ${{ secrets.MEMORY || '2048M' }}
-  DISK: ${{ secrets.DISK || '1536M' }}
+  DOCKER_IMAGE: ${{ secrets.DOCKER_IMAGE || 'ghcr.io/eooce/firefox:latest' }}
+  MEMORY: ${{ secrets.MEMORY || '1536M' }}
+  DISK: ${{ secrets.DISK || '2048M' }}
 
 jobs:
   deploy-app:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Install CF CLI and tools
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install CF CLI
       run: |
         wget -q -O - https://packages.cloudfoundry.org/debian/cli.cloudfoundry.org.key | sudo apt-key add -
         echo "deb https://packages.cloudfoundry.org/debian stable main" | sudo tee /etc/apt/sources.list.d/cloudfoundry-cli.list
         sudo apt-get update
-        sudo apt-get install -y cf8-cli curl
+        sudo apt-get install -y cf8-cli
 
     - name: Determine CF API endpoint and app name
       run: |
+        # 设置API端点和生成随机字符串
         RANDOM_STR=$(head /dev/urandom | tr -dc 'a-z' | head -c 6)
         
         case "${{ github.event.inputs.region }}" in
-          "SG(free)") CF_API="https://api.cf.ap21.hana.ondemand.com"; APP_PREFIX="freesg" ;;
-          "US(free)") CF_API="https://api.cf.us10-001.hana.ondemand.com"; APP_PREFIX="freeus" ;;
-          "AWS-AU(Sydney)") CF_API="https://api.cf.ap10.hana.ondemand.com"; APP_PREFIX="awsau" ;;
-          "AWS-BR(São Paulo)") CF_API="https://api.cf.br10.hana.ondemand.com"; APP_PREFIX="awsbr" ;;
-          "AWS-KR(Seoul)") CF_API="https://api.cf.ap12.hana.ondemand.com"; APP_PREFIX="awskr" ;;
-          "AWS-CA(Montreal)") CF_API="https://api.cf.ca10.hana.ondemand.com"; APP_PREFIX="awsca" ;;
-          "AWS-US(VA)") CF_API="https://api.cf.us10-001.hana.ondemand.com"; APP_PREFIX="awsusva" ;;
-          "AWS-US(OR)") CF_API="https://api.cf.us11.hana.ondemand.com"; APP_PREFIX="awsusor" ;;
-          "AWS-EU(Frankfurt)") CF_API="https://api.cf.eu10-005.hana.ondemand.com"; APP_PREFIX="awseu" ;;
-          "AWS-JP(Tokyo)") CF_API="https://api.cf.jp10.hana.ondemand.com"; APP_PREFIX="awsjp" ;;
-          "AWS-SG(Singapore)") CF_API="https://api.cf.ap11.hana.ondemand.com"; APP_PREFIX="awssg" ;;
-          "GCP-AU(Sydney)") CF_API="https://api.cf.ap30.hana.ondemand.com"; APP_PREFIX="gcpau" ;;
-          "GCP-BR(São Paulo)") CF_API="https://api.cf.br30.hana.ondemand.com"; APP_PREFIX="gcpbr" ;;
-          "GCP-US(IA)") CF_API="https://api.cf.us30.hana.ondemand.com"; APP_PREFIX="gcpus" ;;
-          "GCP-EU(Frankfurt)") CF_API="https://api.cf.eu30.hana.ondemand.com"; APP_PREFIX="gcpeu" ;;
-          "GCP-JP(Osaka)") CF_API="https://api.cf.jp30.hana.ondemand.com"; APP_PREFIX="gcpjpo" ;;
-          "GCP-JP(Tokyo)") CF_API="https://api.cf.jp31.hana.ondemand.com"; APP_PREFIX="gcpjpt" ;;
-          "GCP-IL(Tel Aviv)") CF_API="https://api.cf.il30.hana.ondemand.com"; APP_PREFIX="gcpil" ;;
-          "GCP-IN(Mumbai)") CF_API="https://api.cf.in30.hana.ondemand.com"; APP_PREFIX="gcpin" ;;
-          "GCP-KSA(Dammam)") CF_API="https://api.cf.sa31.hana.ondemand.com"; APP_PREFIX="gcpsa" ;;
-          "Azure-AU(Sydney)") CF_API="https://api.cf.ap20.hana.ondemand.com"; APP_PREFIX="azau" ;;
-          "Azure-BR(São Paulo)") CF_API="https://api.cf.br20.hana.ondemand.com"; APP_PREFIX="azbr" ;;
-          "Azure-CA(Montreal)") CF_API="https://api.cf.ca20.hana.ondemand.com"; APP_PREFIX="azca" ;;
-          "Azure-US(VA)") CF_API="https://api.cf.us21.hana.ondemand.com"; APP_PREFIX="azva" ;;
-          "Azure-US(WA)") CF_API="https://api.cf.us20.hana.ondemand.com"; APP_PREFIX="azwa" ;;
-          "Azure-EU(Netherlands)") CF_API="https://api.cf.eu20-001.hana.ondemand.com"; APP_PREFIX="azeu" ;;
-          "Azure-JP(Tokyo)") CF_API="https://api.cf.jp20.hana.ondemand.com"; APP_PREFIX="azjp" ;;
-          "Azure-SG(Singapore)") CF_API="https://api.cf.ap21.hana.ondemand.com"; APP_PREFIX="azsg" ;;
-          "Neo-UAE(Dubai)") CF_API="https://api.cf.neo-ae1.hana.ondemand.com"; APP_PREFIX="neouae" ;;
-          "Neo-KSA(Riyadh)") CF_API="https://api.cf.neo-sa1.hana.ondemand.com"; APP_PREFIX="neoksa" ;;
+          # 免费区域
+          "SG(free)")
+            echo "CF_API=https://api.cf.ap21.hana.ondemand.com" >> $GITHUB_ENV
+            echo "APP_NAME=firefox-freesg$RANDOM_STR" >> $GITHUB_ENV
+            ;;
+          "US(free)")
+            echo "CF_API=https://api.cf.us10-001.hana.ondemand.com" >> $GITHUB_ENV
+            echo "APP_NAME=firefox-freeus$RANDOM_STR" >> $GITHUB_ENV
+            ;;
+          # AWS 区域
+          "AWS-AU(Sydney)")
+            echo "CF_API=https://api.cf.ap10.hana.ondemand.com" >> $GITHUB_ENV
+            echo "APP_NAME=firefox-awsau$RANDOM_STR" >> $GITHUB_ENV
+            ;;
+          "AWS-BR(São Paulo)")
+            echo "CF_API=https://api.cf.br10.hana.ondemand.com" >> $GITHUB_ENV
+            echo "APP_NAME=firefox-awsbr$RANDOM_STR" >> $GITHUB_ENV
+            ;;
+          "AWS-KR(Seoul)")
+            echo "CF_API=https://api.cf.ap12.hana.ondemand.com" >> $GITHUB_ENV
+            echo "APP_NAME=firefox-awskr$RANDOM_STR" >> $GITHUB_ENV
+            ;;
+          "AWS-CA(Montreal)")
+            echo "CF_API=https://api.cf.ca10.hana.ondemand.com" >> $GITHUB_ENV
+            echo "APP_NAME=firefox-awsca$RANDOM_STR" >> $GITHUB_ENV
+            ;;
+          "AWS-US(VA)")
+            echo "CF_API=https://api.cf.us10-001.hana.ondemand.com" >> $GITHUB_ENV
+            echo "APP_NAME=firefox-awsusva$RANDOM_STR" >> $GITHUB_ENV
+            ;;
+          "AWS-US(OR)")
+            echo "CF_API=https://api.cf.us11.hana.ondemand.com" >> $GITHUB_ENV
+            echo "APP_NAME=firefox-awsusor$RANDOM_STR" >> $GITHUB_ENV
+            ;;
+          "AWS-EU(Frankfurt)")
+            echo "CF_API=https://api.cf.eu10-005.hana.ondemand.com" >> $GITHUB_ENV
+            echo "APP_NAME=firefox-waseu$RANDOM_STR" >> $GITHUB_ENV
+            ;;
+          "AWS-JP(Tokyo)")
+            echo "CF_API=https://api.cf.jp10.hana.ondemand.com" >> $GITHUB_ENV
+            echo "APP_NAME=firefox-awsjp$RANDOM_STR" >> $GITHUB_ENV
+            ;;
+          "AWS-SG(Singapore)")
+            echo "CF_API=https://api.cf.ap11.hana.ondemand.com" >> $GITHUB_ENV
+            echo "APP_NAME=firefox-awssg$RANDOM_STR" >> $GITHUB_ENV
+            ;;
+          
+          # GCP 区域
+          "GCP-AU(Sydney)")
+            echo "CF_API=https://api.cf.ap30.hana.ondemand.com" >> $GITHUB_ENV
+            echo "APP_NAME=firefox-gcpau$RANDOM_STR" >> $GITHUB_ENV
+            ;;
+          "GCP-BR(São Paulo)")
+            echo "CF_API=https://api.cf.br30.hana.ondemand.com" >> $GITHUB_ENV
+            echo "APP_NAME=firefox-gcpbr$RANDOM_STR" >> $GITHUB_ENV
+            ;;
+          "GCP-US(IA)")
+            echo "CF_API=https://api.cf.us30.hana.ondemand.com" >> $GITHUB_ENV
+            echo "APP_NAME=firefox-gcpus$RANDOM_STR" >> $GITHUB_ENV
+            ;;
+          "GCP-EU(Frankfurt)")
+            echo "CF_API=https://api.cf.eu30.hana.ondemand.com" >> $GITHUB_ENV
+            echo "APP_NAME=firefox-gcpeu$RANDOM_STR" >> $GITHUB_ENV
+            ;;
+          "GCP-JP(Osaka)")
+            echo "CF_API=https://api.cf.jp30.hana.ondemand.com" >> $GITHUB_ENV
+            echo "APP_NAME=firefox-gcpjpo$RANDOM_STR" >> $GITHUB_ENV
+            ;;
+          "GCP-JP(Tokyo)")
+            echo "CF_API=https://api.cf.jp31.hana.ondemand.com" >> $GITHUB_ENV
+            echo "APP_NAME=firefox-gcpjpt$RANDOM_STR" >> $GITHUB_ENV
+            ;;
+          "GCP-IL(Tel Aviv)")
+            echo "CF_API=https://api.cf.il30.hana.ondemand.com" >> $GITHUB_ENV
+            echo "APP_NAME=firefox-gcpil$RANDOM_STR" >> $GITHUB_ENV
+            ;;
+          "GCP-IN(Mumbai)")
+            echo "CF_API=https://api.cf.in30.hana.ondemand.com" >> $GITHUB_ENV
+            echo "APP_NAME=firefox-gcpin$RANDOM_STR" >> $GITHUB_ENV
+            ;;
+          "GCP-KSA(Dammam)")
+            echo "CF_API=https://api.cf.sa31.hana.ondemand.com" >> $GITHUB_ENV
+            echo "APP_NAME=firefox-gcpsa$RANDOM_STR" >> $GITHUB_ENV
+            ;;
+          
+          # Azure 区域
+          "Azure-AU(Sydney)")
+            echo "CF_API=https://api.cf.ap20.hana.ondemand.com" >> $GITHUB_ENV
+            echo "APP_NAME=firefox-azau$RANDOM_STR" >> $GITHUB_ENV
+            ;;
+          "Azure-BR(São Paulo)")
+            echo "CF_API=https://api.cf.br20.hana.ondemand.com" >> $GITHUB_ENV
+            echo "APP_NAME=firefox-azbr$RANDOM_STR" >> $GITHUB_ENV
+            ;;
+          "Azure-CA(Montreal)")
+            echo "CF_API=https://api.cf.ca20.hana.ondemand.com" >> $GITHUB_ENV
+            echo "APP_NAME=firefox-azca$RANDOM_STR" >> $GITHUB_ENV
+            ;;
+          "Azure-US(VA)")
+            echo "CF_API=https://api.cf.us21.hana.ondemand.com" >> $GITHUB_ENV
+            echo "APP_NAME=firefox-azva$RANDOM_STR" >> $GITHUB_ENV
+            ;;
+          "Azure-US(WA)")
+            echo "CF_API=https://api.cf.us20.hana.ondemand.com" >> $GITHUB_ENV
+            echo "APP_NAME=firefox-azwa$RANDOM_STR" >> $GITHUB_ENV
+            ;;
+          "Azure-EU(Netherlands)")
+            echo "CF_API=https://api.cf.eu20-001.hana.ondemand.com" >> $GITHUB_ENV
+            echo "APP_NAME=firefox-azeu$RANDOM_STR" >> $GITHUB_ENV
+            ;;
+          "Azure-JP(Tokyo)")
+            echo "CF_API=https://api.cf.jp20.hana.ondemand.com" >> $GITHUB_ENV
+            echo "APP_NAME=firefox-azjp$RANDOM_STR" >> $GITHUB_ENV
+            ;;
+          "Azure-SG(Singapore)")
+            echo "CF_API=https://api.cf.ap21.hana.ondemand.com" >> $GITHUB_ENV
+            echo "APP_NAME=firefox-azsg$RANDOM_STR" >> $GITHUB_ENV
+            ;;
+          
+          # SAP Neo 区域
+          "Neo-UAE(Dubai)")
+            echo "CF_API=https://api.cf.neo-ae1.hana.ondemand.com" >> $GITHUB_ENV
+            echo "APP_NAME=firefox-neouae$RANDOM_STR" >> $GITHUB_ENV
+            ;;
+          "Neo-KSA(Riyadh)")
+            echo "CF_API=https://api.cf.neo-sa1.hana.ondemand.com" >> $GITHUB_ENV
+            echo "APP_NAME=firefox-neoksa$RANDOM_STR" >> $GITHUB_ENV
+            ;;
         esac
         
-        echo "CF_API=$CF_API" >> $GITHUB_ENV
-        if [ -z "${{ github.event.inputs.app_name }}" ]; then
-          echo "APP_NAME=browser-$APP_PREFIX$RANDOM_STR" >> $GITHUB_ENV
-        else
+        # 如果用户提供了应用名称，则使用用户提供的
+        if [ -n "${{ github.event.inputs.app_name }}" ]; then
           echo "APP_NAME=${{ github.event.inputs.app_name }}" >> $GITHUB_ENV
         fi
-        echo "Selected region: ${{ github.event.inputs.region }}, App: $APP_NAME, API: $CF_API"
+        
+        echo "使用API端点: $CF_API"
+        echo "应用名称: $APP_NAME"
+        echo "部署类型: ${{ env.DOCKER_IMAGE }}"
 
     - name: Login to Cloud Foundry
       run: |
-        cf login -a ${{ env.CF_API }} -u "${{ secrets.EMAIL }}" -p "${{ secrets.PASSWORD }}" --skip-ssl-validation
-        ORG=$(cf orgs | tail -n +4 | head -1 | xargs)
-        SPACE=$(cf spaces | tail -n +4 | head -1 | xargs)
-        if [ -z "$ORG" ] || [ -z "$SPACE" ]; then
-          echo "❌ Failed to detect org/space"
-          exit 1
-        fi
-        cf target -o "$ORG" -s "$SPACE"
-        echo "Logged in to org: $ORG, space: $SPACE"
+        cf login -a ${{ env.CF_API }} -u "${{ secrets.EMAIL }}" -p "${{ secrets.PASSWORD }}"
 
-    - name: Deploy application with custom start command
+        # 获取组织列表
+        ORG=$(cf orgs | sed -n '4p')
+        echo "Selected org: $ORG"
+        echo "ORG=$ORG" >> $GITHUB_ENV
+
+        # 获取空间列表
+        SPACE=$(cf spaces | sed -n '4p')
+        echo "Selected space: $SPACE"
+        echo "SPACE=$SPACE" >> $GITHUB_ENV
+
+        # 使用获取的组织和空间重新登录
+        cf login -a ${{ env.CF_API }} -u "${{ secrets.EMAIL }}" -p "${{ secrets.PASSWORD }}" -o "$ORG" -s "$SPACE"
+
+    - name: Deploy application
       run: |
-        # 自定义启动命令：用 -c 覆盖 docker CMD，展开 $PORT 绑定 websockify
-        CUSTOM_CMD='bash -c "export PORT=\${PORT:-6080}; echo \"PORT: \$PORT\"; export VNC_PORT=5900; export VNC_PASSWORD=\${VNC_PASSWORD:-vncpass}; export VNC_RESOLUTION=\${VNC_RESOLUTION:-1280x720}; vncserver :1 -geometry \$VNC_RESOLUTION -localhost no; if [ \"\$AUTO_START_BROWSER\" = \"true\" ]; then STARTING_WEBSITE_URL=\${STARTING_WEBSITE_URL:-https://www.google.com}; nohup firefox --no-remote --new-instance \"\$STARTING_WEBSITE_URL\" > /dev/null 2>&1 &; fi; nohup websockify --bind=0.0.0.0:\$PORT localhost:\$VNC_PORT > /websockify.log 2>&1 &; if [ -d \"/opt/noVNC\" ]; then cd /opt/noVNC; nohup ./utils/novnc_proxy --vnc localhost:\$VNC_PORT --listen \$PORT > /novnc.log 2>&1 &; fi; tail -f /dev/null"'
-        
-        if cf push ${{ env.APP_NAME }} \
-          --docker-image ${{ env.DOCKER_IMAGE }} \
-          -c "$CUSTOM_CMD" \
-          -m ${{ env.MEMORY }} \
-          -k ${{ env.DISK }} \
-          --health-check-type process \
-          --no-start; then
-          echo "✅ 应用创建成功（自定义命令覆盖端口绑定）"
+        if cf push ${{ env.APP_NAME }} --docker-image ${{ env.DOCKER_IMAGE }} -m ${{ env.MEMORY }} -k ${{ env.DISK }} --health-check-type port; then
+          echo "Deployment successful"
         else
-          echo "❌ 部署失败"
+          cf delete ${{ env.APP_NAME }} -f
+          echo "伙计,没资源了,部署失败,请明天早上8:10至9:00再尝试部署,已清理失败部署残留"
           exit 1
         fi
-
-    - name: Set environment variables
-      run: |
-        cf set-env ${{ env.APP_NAME }} VNC_PASSWORD "${{ secrets.VNC_PASSWORD || 'vncpass' }}"
-        cf set-env ${{ env.APP_NAME }} VNC_RESOLUTION "${{ secrets.VNC_RESOLUTION || '1280x720' }}"
-        cf set-env ${{ env.APP_NAME }} AUTO_START_BROWSER "true"
-        cf set-env ${{ env.APP_NAME }} STARTING_WEBSITE_URL "https://www.google.com"
-        echo "✅ 环境变量设置完成（命令已处理 \$PORT）"
-
-    - name: Check Detailed Logs
-      run: |
-        sleep 5
-        cf logs ${{ env.APP_NAME }} --recent | grep -E "(PORT|VNC|websockify|Listening|bind|success|exited)" || echo "日志检查：等待启动"
-
-    - name: Start application
-      run: |
-        cf start ${{ env.APP_NAME }}
-        sleep 30
         
-        for i in {1..30}; do
-          STATUS=$(cf app ${{ env.APP_NAME }} | grep "requested state:" | awk '{print $3}')
-          INSTANCES=$(cf app ${{ env.APP_NAME }} | grep "#0" | awk '{print $2}' || echo "starting")
-          
-          echo "[$i/30] 状态: $STATUS, 实例: $INSTANCES"
-          
-          if [ "$STATUS" = "started" ] && [ "$INSTANCES" = "running" ]; then
-            echo "✅ 浏览器启动成功!"
-            ROUTE=$(cf app ${{ env.APP_NAME }} | grep -E "(routes:|urls:)" | awk '{print $2}' | head -1 | sed 's/,//' || echo "unknown")
-            if [ "$ROUTE" != "unknown" ]; then
-              RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" -m 10 https://$ROUTE || echo "timeout")
-              echo "HTTP 测试响应: $RESPONSE (200 表示成功)"
+    - name: Set environment variables and restart app
+      run: |
+        # VNC密码和语言环境变量
+        cf set-env ${{ env.APP_NAME }} LANG "${{ secrets.LANG || 'zh_CN.UTF-8' }}"
+        cf set-env ${{ env.APP_NAME }} VNC_PASSWORD "${{ secrets.VNC_PASSWORD || '123456' }}"
+        
+        # 可选：从文件读取环境变量(如果存在)
+        if [ -f .env ]; then
+          while IFS= read -r line; do
+            if [[ ! "$line" =~ ^# ]] && [[ -n "$line" ]]; then
+              IFS='=' read -r key value <<< "$line"
+              cf set-env ${{ env.APP_NAME }} "$key" "$value"
             fi
-            echo ""
-            echo "🌐 访问地址: https://$ROUTE"
-            echo "🔐 VNC密码: ${{ secrets.VNC_PASSWORD || 'vncpass' }}"
-            echo ""
-            echo "💡 打开地址后点击'连接'按钮即可使用浏览器"
-            cf logs ${{ env.APP_NAME }} --recent | grep -E "(PORT|VNC|websockify|Listening|bind)" || echo "日志检查完成"
-            exit 0
-          fi
-          
-          if [ $i -eq 30 ]; then
-            echo "❌ 启动超时"
-            cf logs ${{ env.APP_NAME }} --recent
-            cf events ${{ env.APP_NAME }}
-            exit 1
-          fi
-          
-          sleep 5
-        done
+          done < .env
+        fi
+        
+        sleep 3
+        
+        cf restage ${{ env.APP_NAME }}
+
+    - name: Verify deployment
+      run: |
+        STATUS=$(cf app ${{ env.APP_NAME }} | grep "requested state:" | awk '{print $3}')
+        if [ "$STATUS" = "started" ]; then
+          echo "✅ firefox启动成功"
+        else
+          echo "❌ 应用启动失败，当前状态: $STATUS"
+          echo "查看应用日志:"
+          cf logs ${{ env.APP_NAME }} --recent
+          exit 1
+        fi
+        
+    - name: 详细部署信息
+      run: |
+        echo "🚀 部署完成！详细信息如下："
+        echo "区域(Region): ${{ github.event.inputs.region }}"
+        echo "组织(ORG): ${{ env.ORG }}"
+        echo "空间(SPACE): ${{ env.SPACE }}"
+        echo "应用名称(App Name): ${{ env.APP_NAME }}"
+
+        # 获取应用路由
+        ROUTE=$(cf app ${{ env.APP_NAME }} | grep "routes:" | awk '{print $2}')
+        if [ -n "$ROUTE" ]; then
+          echo "Firefox—URL: https://$ROUTE"
+        else
+          echo "⚠️ 未找到应用路由，请检查部署状态。"
+        fi
