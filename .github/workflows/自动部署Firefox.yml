@@ -118,14 +118,14 @@ jobs:
         cf target -o "$ORG" -s "$SPACE"
         echo "Logged in to org: $ORG, space: $SPACE"
 
-    - name: Deploy application with custom command
+    - name: Deploy application with custom start command
       run: |
-        # 自定义启动命令：覆盖原 entrypoint，展开 $PORT 绑定 websockify
-        CUSTOM_CMD="bash -c 'export PORT=\${PORT:-6080}; echo \"PORT: \$PORT\"; export VNC_PORT=5900; export VNC_PASSWORD=${{ secrets.VNC_PASSWORD || 'vncpass' }}; export VNC_RESOLUTION=${{ secrets.VNC_RESOLUTION || '1280x720' }}; vncserver :1 -geometry \$VNC_RESOLUTION -passwd \$VNC_PASSWORD -localhost no; if [ \"\$AUTO_START_BROWSER\" = \"true\" ]; then STARTING_WEBSITE_URL=\"https://www.google.com\"; nohup firefox --no-remote --new-instance \"\$STARTING_WEBSITE_URL\" > /dev/null 2>&1 &; fi; nohup websockify --bind=0.0.0.0:\$PORT localhost:\$VNC_PORT > /websockify.log 2>&1 &; if [ -d \"/opt/noVNC\" ]; then cd /opt/noVNC; nohup ./utils/novnc_proxy --vnc localhost:\$VNC_PORT --listen \$PORT > /novnc.log 2>&1 &; fi; tail -f /dev/null'"
+        # 自定义启动命令：用 -c 覆盖 docker CMD，展开 $PORT 绑定 websockify
+        CUSTOM_CMD='bash -c "export PORT=\${PORT:-6080}; echo \"PORT: \$PORT\"; export VNC_PORT=5900; export VNC_PASSWORD=\${VNC_PASSWORD:-vncpass}; export VNC_RESOLUTION=\${VNC_RESOLUTION:-1280x720}; vncserver :1 -geometry \$VNC_RESOLUTION -localhost no; if [ \"\$AUTO_START_BROWSER\" = \"true\" ]; then STARTING_WEBSITE_URL=\${STARTING_WEBSITE_URL:-https://www.google.com}; nohup firefox --no-remote --new-instance \"\$STARTING_WEBSITE_URL\" > /dev/null 2>&1 &; fi; nohup websockify --bind=0.0.0.0:\$PORT localhost:\$VNC_PORT > /websockify.log 2>&1 &; if [ -d \"/opt/noVNC\" ]; then cd /opt/noVNC; nohup ./utils/novnc_proxy --vnc localhost:\$VNC_PORT --listen \$PORT > /novnc.log 2>&1 &; fi; tail -f /dev/null"'
         
         if cf push ${{ env.APP_NAME }} \
           --docker-image ${{ env.DOCKER_IMAGE }} \
-          --command "$CUSTOM_CMD" \
+          -c "$CUSTOM_CMD" \
           -m ${{ env.MEMORY }} \
           -k ${{ env.DISK }} \
           --health-check-type process \
@@ -142,7 +142,7 @@ jobs:
         cf set-env ${{ env.APP_NAME }} VNC_RESOLUTION "${{ secrets.VNC_RESOLUTION || '1280x720' }}"
         cf set-env ${{ env.APP_NAME }} AUTO_START_BROWSER "true"
         cf set-env ${{ env.APP_NAME }} STARTING_WEBSITE_URL "https://www.google.com"
-        echo "✅ 环境变量设置完成（命令已处理 $PORT）"
+        echo "✅ 环境变量设置完成（命令已处理 \$PORT）"
 
     - name: Check Detailed Logs
       run: |
@@ -152,7 +152,7 @@ jobs:
     - name: Start application
       run: |
         cf start ${{ env.APP_NAME }}
-        sleep 30  # 延长等待，观察自定义命令
+        sleep 30
         
         for i in {1..30}; do
           STATUS=$(cf app ${{ env.APP_NAME }} | grep "requested state:" | awk '{print $3}')
