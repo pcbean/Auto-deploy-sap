@@ -1,4 +1,4 @@
-name: 自动部署Firefox到SAP
+name: 自动部署Chromium到SAP
 
 on:
   workflow_dispatch:
@@ -45,9 +45,11 @@ on:
         default: ''
 
 env:
-  DOCKER_IMAGE: 'mrcolorrain/vnc-browser:alpine'
+  DOCKER_IMAGE: 'mrcolorrain/vnc-browser:debian'
   MEMORY: ${{ secrets.MEMORY || '1024M' }}
   DISK: ${{ secrets.DISK || '1536M' }}
+  # 启动 Chromium 的常用无头参数，禁用沙盒等以提升兼容性与性能
+  CHROME_OPTS: '--headless --disable-gpu --no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-extensions --remote-debugging-port=9222'
 
 jobs:
   deploy-app:
@@ -57,7 +59,7 @@ jobs:
     - name: Install CF CLI
       run: |
         wget -q -O - https://packages.cloudfoundry.org/debian/cli.cloudfoundry.org.key | sudo apt-key add -
-        echo "deb https://packages.cloudfoundry.org/debian stable main" | sudo tee /etc/apt/sources.list.d/cloudfoundry-cli.list
+        echo "deb [https://packages.cloudfoundry.org/debian](https://packages.cloudfoundry.org/debian) stable main" | sudo tee /etc/apt/sources.list.d/cloudfoundry-cli.list
         sudo apt-get update
         sudo apt-get install -y cf8-cli
 
@@ -129,7 +131,6 @@ jobs:
 
     - name: Set environment variables
       run: |
-        # 关键修复: 让 noVNC WebSocket 使用同一个端口
         cf set-env ${{ env.APP_NAME }} NOVNC_WEBSOCKIFY_PORT '$PORT'
         cf set-env ${{ env.APP_NAME }} VNC_PORT "5900"
         cf set-env ${{ env.APP_NAME }} VNC_PASSWORD "${{ secrets.VNC_PASSWORD || 'vncpass' }}"
