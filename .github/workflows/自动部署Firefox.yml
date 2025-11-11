@@ -45,7 +45,7 @@ on:
         default: ''
 
 env:
-  DOCKER_IMAGE: 'ghcr.io/jlesage/firefox:latest'
+  DOCKER_IMAGE: 'ghcr.io/fhriley/firefox:latest'
   MEMORY: ${{ secrets.MEMORY || '1536M' }}
   DISK: ${{ secrets.DISK || '2048M' }}
 
