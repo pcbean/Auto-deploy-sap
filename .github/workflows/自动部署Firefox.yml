@@ -55,17 +55,17 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Install CF CLI
+    - name: 安装 CF CLI（现代化密钥管理）
       run: |
         set -e
         sudo apt-get update
         sudo apt-get install -y curl gnupg
-        curl -fsSL https://packages.cloudfoundry.org/debian/cli.cloudfoundry.org.gpg | gpg --dearmor | sudo tee /usr/share/keyrings/cloudfoundry-archive-keyring.gpg > /dev/null
-        echo "deb [signed-by=/usr/share/keyrings/cloudfoundry-archive-keyring.gpg] https://packages.cloudfoundry.org/debian stable main" | sudo tee /etc/apt/sources.list.d/cloudfoundry-cli.list > /dev/null
+        curl -fSL https://packages.cloudfoundry.org/debian/cli.cloudfoundry.org.gpg | gpg --dearmor -o /usr/share/keyrings/cloudfoundry-archive-keyring.gpg
+        echo "deb [signed-by=/usr/share/keyrings/cloudfoundry-archive-keyring.gpg] https://packages.cloudfoundry.org/debian stable main" | sudo tee /etc/apt/sources.list.d/cloudfoundry-cli.list
         sudo apt-get update
         sudo apt-get install -y cf8-cli
 
-    - name: Determine CF API endpoint and app name
+    - name: 计算 CF API 与 App 名称
       run: |
         RANDOM_STR=$(head /dev/urandom | tr -dc 'a-z' | head -c 6)
         case "${{ github.event.inputs.region }}" in
@@ -107,19 +107,19 @@ jobs:
           echo "APP_NAME=${{ github.event.inputs.app_name }}" >> $GITHUB_ENV
         fi
 
-    - name: Login to Cloud Foundry
+    - name: CF 登录
       run: |
         cf login -a ${{ env.CF_API }} -u "${{ secrets.EMAIL }}" -p "${{ secrets.PASSWORD }}"
         ORG=$(cf orgs | sed -n '4p')
         SPACE=$(cf spaces | sed -n '4p')
         cf target -o "$ORG" -s "$SPACE"
 
-    - name: Deploy application
+    - name: 部署应用
       run: |
         if cf push ${{ env.APP_NAME }} \
           --docker-image ${{ env.DOCKER_IMAGE }} \
-          -m ${{ env.MEMORY }} \
-          -k ${{ env.DISK }} \
+          -m ${{ secrets.MEMORY || '1024M' }} \
+          -k ${{ secrets.DISK || '1536M' }} \
           --health-check-type process \
           --no-start; then
           echo "✅ 应用创建成功"
@@ -129,41 +129,10 @@ jobs:
           exit 1
         fi
 
-    - name: Set environment variables
-      run: |
-        cf set-env ${{ env.APP_NAME }} NOVNC_WEBSOCKIFY_PORT '$PORT'
-        cf set-env ${{ env.APP_NAME }} VNC_PORT "5900"
-        cf set-env ${{ env.APP_NAME }} VNC_PASSWORD "${{ secrets.VNC_PASSWORD || 'vncpass' }}"
-        cf set-env ${{ env.APP_NAME }} VNC_RESOLUTION "${{ secrets.VNC_RESOLUTION || '1280x720' }}"
-        cf set-env ${{ env.APP_NAME }} AUTO_START_BROWSER "true"
-        cf set-env ${{ env.APP_NAME }} STARTING_WEBSITE_URL "https://www.google.com"
-
-    - name: Start application
+    - name: 启动应用并输出访问地址
       run: |
         cf start ${{ env.APP_NAME }}
         sleep 15
-
-        for i in {1..30}; do
-          STATUS=$(cf app ${{ env.APP_NAME }} | grep "requested state:" | awk '{print $3}')
-          INSTANCES=$(cf app ${{ env.APP_NAME }} | grep "#0" | awk '{print $2}' || echo "starting")
-          echo "[$i/30] 状态: $STATUS, 实例: $INSTANCES"
-
-          if [ "$STATUS" = "started" ] && [ "$INSTANCES" = "running" ]; then
-            echo "✅ 浏览器启动成功!"
-            ROUTE=$(cf app ${{ env.APP_NAME }} | grep "routes:" | awk '{print $2}')
-            echo ""
-            echo "🌐 访问地址: https://$ROUTE"
-            echo "🔐 VNC密码: ${{ secrets.VNC_PASSWORD || 'vncpass' }}"
-            echo ""
-            echo "💡 打开地址后点击'连接'按钮即可使用浏览器"
-            exit 0
-          fi
-
-          if [ $i -eq 30 ]; then
-            echo "❌ 启动超时"
-            cf logs ${{ env.APP_NAME }} --recent
-            exit 1
-          fi
-
-          sleep 5
-        done
+        ROUTE=$(cf app ${{ env.APP_NAME }} | grep "routes:" | awk '{print $2}')
+        echo "🌐 访问地址: https://$ROUTE"
+        echo "🔐 VNC密码: ${{ secrets.VNC_PASSWORD || 'vncpass' }}"
