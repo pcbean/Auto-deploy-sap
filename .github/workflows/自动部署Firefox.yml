@@ -54,12 +54,12 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Install CF CLI
+    - name: Install CF CLI and jq
       run: |
         wget -q -O - https://packages.cloudfoundry.org/debian/cli.cloudfoundry.org.key | sudo apt-key add -
         echo "deb https://packages.cloudfoundry.org/debian stable main" | sudo tee /etc/apt/sources.list.d/cloudfoundry-cli.list
         sudo apt-get update
-        sudo apt-get install -y cf8-cli
+        sudo apt-get install -y cf8-cli jq
 
     - name: Determine CF API endpoint and app name
       run: |
@@ -108,9 +108,13 @@ jobs:
 
     - name: Login to Cloud Foundry
       run: |
-        cf login -a ${{ env.CF_API }} -u "${{ secrets.EMAIL }}" -p "${{ secrets.PASSWORD }}"
-        ORG=$(cf orgs | sed -n '4p' | xargs)
-        SPACE=$(cf spaces | sed -n '4p' | xargs)
+        cf login -a ${{ env.CF_API }} -u "${{ secrets.EMAIL }}" -p "${{ secrets.PASSWORD }}" --skip-ssl-validation
+        ORG=$(cf orgs | tail -n +4 | head -1 | xargs)
+        SPACE=$(cf spaces | tail -n +4 | head -1 | xargs)
+        if [ -z "$ORG" ] || [ -z "$SPACE" ]; then
+          echo "❌ Failed to detect org/space"
+          exit 1
+        fi
         cf target -o "$ORG" -s "$SPACE"
         echo "Logged in to org: $ORG, space: $SPACE"
 
@@ -124,7 +128,6 @@ jobs:
           --no-start; then
           echo "✅ 应用创建成功"
         else
-          cf delete ${{ env.APP_NAME }} -f 2>/dev/null || true
           echo "❌ 部署失败"
           exit 1
         fi
@@ -134,6 +137,8 @@ jobs:
         # 核心修复：重置 NOVNC 端口，让镜像 fallback 到 $PORT；添加 websockify 绑定变量
         cf set-env ${{ env.APP_NAME }} NOVNC_PORT ""  # 重置 noVNC 端口，默认用 $PORT
         cf set-env ${{ env.APP_NAME }} WEBSOCKIFY_BIND "0.0.0.0"  # 全接口监听
+        cf set-env ${{ env.APP_NAME }} WEBSOCKIFY_PORT "$PORT"  # 强制 websockify 使用 $PORT
+        cf set-env ${{ env.APP_NAME }} WEBSOCKIFY_TARGET "localhost:5900"  # VNC 内部目标
         cf set-env ${{ env.APP_NAME }} VNC_PORT "5900"  # 内部 VNC 端口
         cf set-env ${{ env.APP_NAME }} VNC_PASSWORD "${{ secrets.VNC_PASSWORD || 'vncpass' }}"
         cf set-env ${{ env.APP_NAME }} VNC_RESOLUTION "${{ secrets.VNC_RESOLUTION || '1280x720' }}"
@@ -143,18 +148,24 @@ jobs:
         sleep 10  # 等待 restage 完成
         echo "✅ 环境变量设置并 restage 完成"
 
+    - name: Check Detailed Logs
+      run: |
+        sleep 5  # 短暂等待日志生成
+        cf logs ${{ env.APP_NAME }} --recent | grep -E "(error|websockify|PORT|bind|502|VNC|Listening)" || echo "警告：未见关键日志，可能需自定义镜像"
+        cf app ${{ env.APP_NAME }} | grep -E "(state|instances|ports|requested state)"
+
     - name: Start application
       run: |
         cf start ${{ env.APP_NAME }}
         sleep 20  # 增加等待时间，让 websockify 启动
         
         for i in {1..40}; do  # 延长超时到 200s
-          STATUS=$(cf app ${{ env.APP_NAME }} | grep "requested state:" | awk '{print $3}' || echo "unknown")
-          INSTANCES=$(cf app ${{ env.APP_NAME }} | grep "#0" | awk '{print $2}' || echo "starting")
+          STATUS=$(cf app ${{ env.APP_NAME }} --json | jq -r '.requested_state // empty' || echo "unknown")
+          INSTANCES=$(cf app ${{ env.APP_NAME }} --json | jq -r '[.instances[] | select(.state == "RUNNING")] | length' || echo "0")
           
-          echo "[$i/40] 状态: $STATUS, 实例: $INSTANCES"
+          echo "[$i/40] 状态: $STATUS, 运行实例数: $INSTANCES"
           
-          if [ "$STATUS" = "started" ] && [ "$INSTANCES" = "running" ]; then
+          if [ "$STATUS" = "STARTED" ] && [ "$INSTANCES" -gt 0 ]; then
             echo "✅ 浏览器启动成功!"
             ROUTE=$(cf app ${{ env.APP_NAME }} | grep "routes:" | awk '{print $2}' | head -1 || echo "unknown")
             echo ""
@@ -176,3 +187,10 @@ jobs:
           
           sleep 5
         done
+
+    - name: Switch to HTTP Health Check
+      if: always()  # 即使失败也尝试设置
+      run: |
+        cf set-health-check-type ${{ env.APP_NAME }} http --endpoint / || echo "健康检查设置失败"
+        cf restage ${{ env.APP_NAME }} || echo "Restage 失败"
+        echo "切换到 HTTP 健康检查完成"
