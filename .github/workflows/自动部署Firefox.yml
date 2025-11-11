@@ -46,7 +46,7 @@ on:
 
 env:
   DOCKER_IMAGE: 'mrcolorrain/vnc-browser:debian'
-  MEMORY: ${{ secrets.MEMORY || '1024M' }}
+  MEMORY: ${{ secrets.MEMORY || '2048M' }}  # 增加到 2048M，避免资源不足
   DISK: ${{ secrets.DISK || '1536M' }}
 
 jobs:
@@ -131,26 +131,28 @@ jobs:
 
     - name: Set environment variables
       run: |
-        # 移除 NOVNC_WEBSOCKIFY_PORT 设置，让镜像默认使用 $PORT 绑定外部端口（解决 websockify 崩溃）
-        # VNC 内部端口保持 5900，本地通信
-        cf set-env ${{ env.APP_NAME }} VNC_PORT "5900"
+        # 核心修复：重置 NOVNC 端口，让镜像 fallback 到 $PORT；添加 websockify 绑定变量
+        cf set-env ${{ env.APP_NAME }} NOVNC_PORT ""  # 重置 noVNC 端口，默认用 $PORT
+        cf set-env ${{ env.APP_NAME }} WEBSOCKIFY_BIND "0.0.0.0"  # 全接口监听
+        cf set-env ${{ env.APP_NAME }} VNC_PORT "5900"  # 内部 VNC 端口
         cf set-env ${{ env.APP_NAME }} VNC_PASSWORD "${{ secrets.VNC_PASSWORD || 'vncpass' }}"
         cf set-env ${{ env.APP_NAME }} VNC_RESOLUTION "${{ secrets.VNC_RESOLUTION || '1280x720' }}"
         cf set-env ${{ env.APP_NAME }} AUTO_START_BROWSER "true"
         cf set-env ${{ env.APP_NAME }} STARTING_WEBSITE_URL "https://www.google.com"
-        cf restage ${{ env.APP_NAME }}  # 重新 staging 应用环境变更，无需重推镜像
+        cf restage ${{ env.APP_NAME }}  # 应用变更
+        sleep 10  # 等待 restage 完成
         echo "✅ 环境变量设置并 restage 完成"
 
     - name: Start application
       run: |
         cf start ${{ env.APP_NAME }}
-        sleep 15
+        sleep 20  # 增加等待时间，让 websockify 启动
         
-        for i in {1..30}; do
+        for i in {1..40}; do  # 延长超时到 200s
           STATUS=$(cf app ${{ env.APP_NAME }} | grep "requested state:" | awk '{print $3}' || echo "unknown")
           INSTANCES=$(cf app ${{ env.APP_NAME }} | grep "#0" | awk '{print $2}' || echo "starting")
           
-          echo "[$i/30] 状态: $STATUS, 实例: $INSTANCES"
+          echo "[$i/40] 状态: $STATUS, 实例: $INSTANCES"
           
           if [ "$STATUS" = "started" ] && [ "$INSTANCES" = "running" ]; then
             echo "✅ 浏览器启动成功!"
@@ -159,14 +161,16 @@ jobs:
             echo "🌐 访问地址: https://$ROUTE"
             echo "🔐 VNC密码: ${{ secrets.VNC_PASSWORD || 'vncpass' }}"
             echo ""
-            echo "💡 打开地址后点击'连接'按钮即可使用浏览器（WebSocket 将通过 $PORT 代理到 VNC 5900）"
-            cf logs ${{ env.APP_NAME }} --recent | grep -E "(websockify|VNC|PORT)" || echo "检查日志中 websockify 绑定端口"
+            echo "💡 打开地址后点击'连接'按钮即可使用浏览器"
+            # 输出关键日志检查 websockify
+            cf logs ${{ env.APP_NAME }} --recent | grep -E "(websockify|VNC|PORT|Listening)" || echo "警告：未见 websockify 绑定日志，可能需自定义镜像"
             exit 0
           fi
           
-          if [ $i -eq 30 ]; then
+          if [ $i -eq 40 ]; then
             echo "❌ 启动超时"
             cf logs ${{ env.APP_NAME }} --recent
+            cf events ${{ env.APP_NAME }}  # 添加事件日志
             exit 1
           fi
           
