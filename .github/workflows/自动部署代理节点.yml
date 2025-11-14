@@ -52,6 +52,7 @@ on:
           - Azure-JP(Tokyo)
           - Azure-SG(Singapore)
           # SAP Neo 区域
+          - UAE-(Dubai)
           - Neo-UAE(Dubai)
           - Neo-KSA(Riyadh)
       app_name:
@@ -208,6 +209,10 @@ jobs:
             ;;
           
           # SAP Neo 区域
+           "UAE(Dubai)")
+            echo "CF_API=https://api.cf.ae01.hana.ondemand.com" >> $GITHUB_ENV
+            echo "APP_NAME=neo-uae$RANDOM_STR" >> $GITHUB_ENV
+            ;;
           "Neo-UAE(Dubai)")
             echo "CF_API=https://api.cf.neo-ae1.hana.ondemand.com" >> $GITHUB_ENV
             echo "APP_NAME=neo-uae$RANDOM_STR" >> $GITHUB_ENV
