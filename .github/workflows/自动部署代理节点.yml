@@ -19,8 +19,7 @@ on:
         type: choice
         options:
           #  免费区域
-          - SG(free)  # azure新加披
-          - US(free)  # aws美国    
+          - UAE(Dubai)  
           # AWS 区域
           - AWS-AU(Sydney)
           - AWS-BR(São Paulo)
@@ -29,7 +28,6 @@ on:
           - AWS-US(VA)
           - AWS-US(OR)
           - AWS-EU(Frankfurt)
-          - AWS-EU(Milan)
           - AWS-JP(Tokyo)
           - AWS-SG(Singapore)
           # GCP 区域
@@ -52,7 +50,6 @@ on:
           - Azure-JP(Tokyo)
           - Azure-SG(Singapore)
           # SAP Neo 区域
-          - UAE-(Dubai)
           - Neo-UAE(Dubai)
           - Neo-KSA(Riyadh)
       app_name:
@@ -86,8 +83,8 @@ jobs:
         
         case "${{ github.event.inputs.region }}" in
           # 免费区域
-          "SG(free)")
-            echo "CF_API=https://api.cf.ap21.hana.ondemand.com" >> $GITHUB_ENV
+          "UAE(Dubai)")
+            echo "CF_API=https://api.cf.ae01.hana.ondemand.com" >> $GITHUB_ENV
             echo "APP_NAME=free-sg$RANDOM_STR" >> $GITHUB_ENV
             ;;
           "US(free)")
@@ -121,10 +118,6 @@ jobs:
             ;;
           "AWS-EU(Frankfurt)")
             echo "CF_API=https://api.cf.eu10-005.hana.ondemand.com" >> $GITHUB_ENV
-            echo "APP_NAME=aws-eu$RANDOM_STR" >> $GITHUB_ENV
-            ;;
-          "AWS-EU(Milan)")
-            echo "CF_API=https://api.cf.eu13.hana.ondemand.com" >> $GITHUB_ENV
             echo "APP_NAME=aws-eu$RANDOM_STR" >> $GITHUB_ENV
             ;;
           "AWS-JP(Tokyo)")
@@ -209,10 +202,6 @@ jobs:
             ;;
           
           # SAP Neo 区域
-           "UAE(Dubai)")
-            echo "CF_API=https://api.cf.ae01.hana.ondemand.com" >> $GITHUB_ENV
-            echo "APP_NAME=neo-uae$RANDOM_STR" >> $GITHUB_ENV
-            ;;
           "Neo-UAE(Dubai)")
             echo "CF_API=https://api.cf.neo-ae1.hana.ondemand.com" >> $GITHUB_ENV
             echo "APP_NAME=neo-uae$RANDOM_STR" >> $GITHUB_ENV
