@@ -29,6 +29,7 @@ on:
           - AWS-US(VA)
           - AWS-US(OR)
           - AWS-EU(Frankfurt)
+          - AWS-EU(Milan)
           - AWS-JP(Tokyo)
           - AWS-SG(Singapore)
           # GCP 区域
@@ -119,6 +120,10 @@ jobs:
             ;;
           "AWS-EU(Frankfurt)")
             echo "CF_API=https://api.cf.eu10-005.hana.ondemand.com" >> $GITHUB_ENV
+            echo "APP_NAME=aws-eu$RANDOM_STR" >> $GITHUB_ENV
+            ;;
+          "AWS-EU(Milan)")
+            echo "CF_API=https://api.cf.eu13.hana.ondemand.com" >> $GITHUB_ENV
             echo "APP_NAME=aws-eu$RANDOM_STR" >> $GITHUB_ENV
             ;;
           "AWS-JP(Tokyo)")
