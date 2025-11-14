@@ -25,6 +25,7 @@ on:
           - AWS-BR(São Paulo)
           - AWS-KR(Seoul)
           - AWS-CA(Montreal)
+          - AWS-IT(Milan)
           - AWS-US(VA)
           - AWS-US(OR)
           - AWS-EU(Frankfurt)
@@ -106,6 +107,10 @@ jobs:
             ;;
           "AWS-CA(Montreal)")
             echo "CF_API=https://api.cf.ca10.hana.ondemand.com" >> $GITHUB_ENV
+            echo "APP_NAME=aws-ca$RANDOM_STR" >> $GITHUB_ENV
+            ;;
+          "AWS-IT(Milan)")
+            echo "CF_API=https://api.cf.eu13.hana.ondemand.com" >> $GITHUB_ENV
             echo "APP_NAME=aws-ca$RANDOM_STR" >> $GITHUB_ENV
             ;;
           "AWS-US(VA)")
